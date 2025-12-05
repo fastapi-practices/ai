@@ -1,0 +1,1 @@
+pydantic-ai-slim[openai,google,anthropic,groq,mcp]>=1.22.0
