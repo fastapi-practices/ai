@@ -4,12 +4,12 @@ from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy_crud_plus import CRUDPlus
 
-from backend.plugin.ai.model import AiProvider
-from backend.plugin.ai.schema.provider import CreateAiProviderParam, UpdateAiProviderParam
+from backend.plugin.ai.model import AIProvider
+from backend.plugin.ai.schema.provider import CreateAIProviderParam, UpdateAIProviderParam
 
 
-class CRUDAiProvider(CRUDPlus[AiProvider]):
-    async def get(self, db: AsyncSession, pk: int) -> AiProvider | None:
+class CRUDAIProvider(CRUDPlus[AIProvider]):
+    async def get(self, db: AsyncSession, pk: int) -> AIProvider | None:
         """
         获取供应商
 
@@ -23,7 +23,7 @@ class CRUDAiProvider(CRUDPlus[AiProvider]):
         """获取供应商列表查询表达式"""
         return await self.select_order('id', 'desc')
 
-    async def get_all(self, db: AsyncSession) -> Sequence[AiProvider]:
+    async def get_all(self, db: AsyncSession) -> Sequence[AIProvider]:
         """
         获取所有供应商
 
@@ -32,7 +32,7 @@ class CRUDAiProvider(CRUDPlus[AiProvider]):
         """
         return await self.select_models(db)
 
-    async def create(self, db: AsyncSession, obj: CreateAiProviderParam) -> None:
+    async def create(self, db: AsyncSession, obj: CreateAIProviderParam) -> None:
         """
         创建供应商
 
@@ -42,7 +42,7 @@ class CRUDAiProvider(CRUDPlus[AiProvider]):
         """
         await self.create_model(db, obj)
 
-    async def update(self, db: AsyncSession, pk: int, obj: UpdateAiProviderParam) -> int:
+    async def update(self, db: AsyncSession, pk: int, obj: UpdateAIProviderParam) -> int:
         """
         更新供应商
 
@@ -64,4 +64,4 @@ class CRUDAiProvider(CRUDPlus[AiProvider]):
         return await self.delete_model_by_column(db, allow_multiple=True, id__in=pks)
 
 
-ai_provider_dao: CRUDAiProvider = CRUDAiProvider(AiProvider)
+ai_provider_dao: CRUDAIProvider = CRUDAIProvider(AIProvider)
