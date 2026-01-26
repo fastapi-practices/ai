@@ -8,10 +8,6 @@ class AIProviderType(IntEnum):
     anthropic = 1
     gemini = 2
     bedrock = 3
-    cerebras = 4
-    cohere = 5
-    groq = 6
-    hugging_face = 7
-    mistral = 8
-    openrouter = 9
-    outlines = 10
+    groq = 4
+    mistral = 5
+    openrouter = 6
