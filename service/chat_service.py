@@ -56,6 +56,7 @@ class ChatService:
                 api_key=provider.api_key,
                 base_url=provider.api_host,
                 model_settings=model_settings,
+                provider_name=provider.name,
             ),
         ) as result:
             async for text in result.stream_output(debounce_by=0.01):
