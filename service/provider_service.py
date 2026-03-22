@@ -44,7 +44,7 @@ class AIProviderService:
         ai_provider = await self.get(db=db, pk=pk)
         if ai_provider.type not in {AIProviderType.openai, AIProviderType.xai, AIProviderType.openrouter}:
             raise errors.RequestError(msg='当前供应商暂不支持自动同步模型，请手动维护模型列表')
-        url = f'{ai_provider.api_host}/models'
+        url = f'{ai_provider.api_host}/v1/models'
         headers = {'Authorization': f'Bearer {ai_provider.api_key}'}
         async with httpx.AsyncClient(timeout=10) as client:
             try:
