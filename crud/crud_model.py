@@ -95,5 +95,15 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         """
         return await self.delete_model_by_column(db, allow_multiple=True, provider_id=provider_id)
 
+    async def delete_by_providers(self, db: AsyncSession, provider_ids: list[int]) -> int:
+        """
+        通过供应商 ID 列表批量删除模型
+
+        :param db: 数据库会话
+        :param provider_ids: 供应商 ID 列表
+        :return:
+        """
+        return await self.delete_model_by_column(db, allow_multiple=True, provider_id__in=provider_ids)
+
 
 ai_model_dao: CRUDAIModel = CRUDAIModel(AIModel)

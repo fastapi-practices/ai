@@ -150,6 +150,7 @@ class AIProviderService:
         :param obj: 供应商 ID 列表
         :return:
         """
+        await ai_model_dao.delete_by_providers(db, obj.pks)
         count = await ai_provider_dao.delete(db, obj.pks)
         return count
 

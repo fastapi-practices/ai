@@ -8,7 +8,7 @@ from backend.common.model import Base, UniversalText, id_key
 class Mcp(Base):
     """MCP 表"""
 
-    __tablename__ = 'sys_mcp'
+    __tablename__ = 'ai_mcp'
 
     id: Mapped[id_key] = mapped_column(init=False)
     name: Mapped[str] = mapped_column(sa.String(64), unique=True, comment='MCP 名称')
