@@ -82,7 +82,6 @@ class AIProviderService:
                     **CreateAIModelParam(
                         provider_id=pk,
                         model_id=obj.id,
-                        owned_by=obj.owned_by,
                         status=StatusType.enable,
                     ).model_dump(),
                     'created_time': timezone.now(),

@@ -11,7 +11,6 @@ class AIModelSchemaBase(SchemaBase):
 
     provider_id: int = Field(description='供应商 ID')
     model_id: str = Field(description='模型 ID')
-    owned_by: str = Field(description='拥有该模型的组织')
     status: StatusType = Field(description='状态')
     remark: str | None = Field(default=None, description='备注')
 
