@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy_crud_plus import CRUDPlus
@@ -45,6 +47,15 @@ class CRUDMcp(CRUDPlus[Mcp]):
             filters.update(type=type)
 
         return await self.select_order('id', 'desc', **filters)
+
+    async def get_all(self, db: AsyncSession) -> Sequence[Mcp]:
+        """
+        获取所有 MCP
+
+        :param db: 数据库会话
+        :return:
+        """
+        return await self.select_models(db)
 
     async def create(self, db: AsyncSession, obj: CreateMcpParam) -> None:
         """

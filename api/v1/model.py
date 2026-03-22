@@ -19,6 +19,12 @@ from backend.plugin.ai.service.model_service import ai_model_service
 router = APIRouter()
 
 
+@router.get('/all', summary='获取所有模型', dependencies=[DependsJwtAuth])
+async def get_all_ai_models(db: CurrentSession) -> ResponseSchemaModel[list[GetAIModelDetail]]:
+    data = await ai_model_service.get_all(db=db)
+    return response_base.success(data=data)
+
+
 @router.get('/{pk}', summary='获取模型详情', dependencies=[DependsJwtAuth])
 async def get_ai_model(
     db: CurrentSession, pk: Annotated[int, Path(description='模型 ID')]

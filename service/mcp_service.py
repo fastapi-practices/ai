@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,17 @@ class McpService:
         :return:
         """
         return await mcp_dao.get_select(name=name, type=type)
+
+    @staticmethod
+    async def get_all(*, db: AsyncSession) -> Sequence[Mcp]:
+        """
+        获取所有 MCP
+
+        :param db: 数据库会话
+        :return:
+        """
+        mcps = await mcp_dao.get_all(db)
+        return mcps
 
     @staticmethod
     async def create(*, db: AsyncSession, obj: CreateMcpParam) -> None:

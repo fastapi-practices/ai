@@ -14,6 +14,12 @@ from backend.plugin.ai.service.mcp_service import mcp_service
 router = APIRouter()
 
 
+@router.get('/all', summary='获取所有 MCP', dependencies=[DependsJwtAuth])
+async def get_all_mcps(db: CurrentSession) -> ResponseSchemaModel[list[GetMcpDetail]]:
+    data = await mcp_service.get_all(db=db)
+    return response_base.success(data=data)
+
+
 @router.get('/{pk}', summary='获取 MCP 详情', dependencies=[DependsJwtAuth])
 async def get_mcp(
     db: CurrentSession, pk: Annotated[int, Path(description='MCP ID')]

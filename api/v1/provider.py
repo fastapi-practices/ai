@@ -20,6 +20,12 @@ from backend.plugin.ai.service.provider_service import ai_provider_service
 router = APIRouter()
 
 
+@router.get('/all', summary='获取所有供应商', dependencies=[DependsJwtAuth])
+async def get_all_ai_providers(db: CurrentSession) -> ResponseSchemaModel[list[GetAIProviderDetail]]:
+    data = await ai_provider_service.get_all(db=db)
+    return response_base.success(data=data)
+
+
 @router.get('/{pk}', summary='获取供应商详情', dependencies=[DependsJwtAuth])
 async def get_ai_provider(
     db: CurrentSession, pk: Annotated[int, Path(description='provider ID')]
