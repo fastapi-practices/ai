@@ -10,21 +10,21 @@ begin
     returning id into ai_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('AI Chat', 'AIChat', '/plugins/ai/chat', 1, 'ri:chat-ai-line', 1, '/plugins/ai/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null);
+    values ('AI Chat', 'AIChat', '/plugins/ai/chat', 1, 'ri:chat-ai-line', 1, '/plugins/ai/views/chat', null, 1, 1, 1, '', null, ai_menu_id, now(), null);
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('供应商管理', 'AIProviderManage', '/plugins/ai/provider', 2, 'mdi:hub-outline', 1, '/plugins/ai/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
+    values ('供应商管理', 'AIProviderManage', '/plugins/ai/provider', 2, 'mdi:hub-outline', 1, '/plugins/ai/views/provider', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
     returning id into ai_provider_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('模型管理', 'AIModelManage', '/plugins/ai/model', 3, 'carbon:model-alt', 1, '/plugins/ai/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
+    values ('模型管理', 'AIModelManage', '/plugins/ai/model', 3, 'carbon:model-alt', 1, '/plugins/ai/views/model', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
     returning id into ai_model_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('快捷短语', 'AIQuickPhraseManage', '/plugins/ai/quick-phrase', 4, 'mdi:lightning-bolt-outline', 1, '/plugins/ai/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null);
+    values ('快捷短语', 'AIQuickPhraseManage', '/plugins/ai/quick-phrase', 4, 'mdi:lightning-bolt-outline', 1, '/plugins/ai/views/quick-phrase', null, 1, 1, 1, '', null, ai_menu_id, now(), null);
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('MCP 管理', 'AIMcpManage', '/plugins/ai/mcp', 5, 'simple-icons:modelcontextprotocol', 1, '/plugins/ai/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
+    values ('MCP 管理', 'AIMcpManage', '/plugins/ai/mcp', 5, 'simple-icons:modelcontextprotocol', 1, '/plugins/ai/views/mcp', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
     returning id into ai_mcp_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
