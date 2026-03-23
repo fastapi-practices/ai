@@ -28,14 +28,23 @@ class AIModelService:
         return ai_model
 
     @staticmethod
-    async def get_list(db: AsyncSession) -> dict[str, Any]:
+    async def get_list(
+        *,
+        db: AsyncSession,
+        provider_id: int | None,
+        model_id: str | None,
+        status: int | None,
+    ) -> dict[str, Any]:
         """
         获取 AI 模型列表
 
         :param db: 数据库会话
+        :param provider_id: 供应商 ID
+        :param model_id: 模型 ID
+        :param status: 状态
         :return:
         """
-        ai_model_select = await ai_model_dao.get_select()
+        ai_model_select = await ai_model_dao.get_select(provider_id, model_id, status)
         return await paging_data(db, ai_model_select)
 
     @staticmethod

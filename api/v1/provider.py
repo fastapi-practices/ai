@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 
 from backend.common.pagination import DependsPagination, PageData
 from backend.common.response.response_schema import ResponseModel, ResponseSchemaModel, response_base
@@ -60,8 +60,13 @@ async def sync_ai_provider_models(
         DependsPagination,
     ],
 )
-async def get_ai_providers_paginated(db: CurrentSession) -> ResponseSchemaModel[PageData[GetAIProviderDetail]]:
-    page_data = await ai_provider_service.get_list(db=db)
+async def get_ai_providers_paginated(
+    db: CurrentSession,
+    name: Annotated[str | None, Query(description='供应商名称')] = None,
+    type: Annotated[int | None, Query(description='供应商类型')] = None,
+    status: Annotated[int | None, Query(description='状态')] = None,
+) -> ResponseSchemaModel[PageData[GetAIProviderDetail]]:
+    page_data = await ai_provider_service.get_list(db=db, name=name, type=type, status=status)
     return response_base.success(data=page_data)
 
 

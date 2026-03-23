@@ -91,14 +91,23 @@ class AIProviderService:
         )
 
     @staticmethod
-    async def get_list(db: AsyncSession) -> dict[str, Any]:
+    async def get_list(
+        *,
+        db: AsyncSession,
+        name: str | None,
+        type: int | None,
+        status: int | None,
+    ) -> dict[str, Any]:
         """
         获取 AI 供应商列表
 
         :param db: 数据库会话
+        :param name: 供应商名称
+        :param type: 供应商类型
+        :param status: 状态
         :return:
         """
-        ai_provider_select = await ai_provider_dao.get_select()
+        ai_provider_select = await ai_provider_dao.get_select(name, type, status)
         return await paging_data(db, ai_provider_select)
 
     @staticmethod

@@ -31,9 +31,25 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         """
         return await self.select_model_by_column(db, model_id=model_id, provider_id=provider_id)
 
-    async def get_select(self) -> Select:
-        """获取模型列表查询表达式"""
-        return await self.select_order('id', 'desc')
+    async def get_select(self, provider_id: int | None, model_id: str | None, status: int | None) -> Select:
+        """
+        获取模型列表查询表达式
+
+        :param provider_id: 供应商 ID
+        :param model_id: 模型 ID
+        :param status: 状态
+        :return:
+        """
+        filters = {}
+
+        if provider_id is not None:
+            filters['provider_id'] = provider_id
+        if model_id is not None:
+            filters['model_id__like'] = f'%{model_id}%'
+        if status is not None:
+            filters['status'] = status
+
+        return await self.select_order('id', 'desc', **filters)
 
     async def get_all(self, db: AsyncSession, provider_id: int) -> Sequence[AIModel]:
         """

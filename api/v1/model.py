@@ -43,8 +43,18 @@ async def get_ai_model(
         DependsPagination,
     ],
 )
-async def get_ai_models_paginated(db: CurrentSession) -> ResponseSchemaModel[PageData[GetAIModelDetail]]:
-    page_data = await ai_model_service.get_list(db=db)
+async def get_ai_models_paginated(
+    db: CurrentSession,
+    provider_id: Annotated[int | None, Query(description='供应商 ID')] = None,
+    model_id: Annotated[str | None, Query(description='模型 ID')] = None,
+    status: Annotated[int | None, Query(description='状态')] = None,
+) -> ResponseSchemaModel[PageData[GetAIModelDetail]]:
+    page_data = await ai_model_service.get_list(
+        db=db,
+        provider_id=provider_id,
+        model_id=model_id,
+        status=status,
+    )
     return response_base.success(data=page_data)
 
 

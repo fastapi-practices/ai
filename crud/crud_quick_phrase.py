@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 
+from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy_crud_plus import CRUDPlus
 
@@ -30,6 +31,21 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :return:
         """
         return await self.select_model_by_column(db, id=pk, user_id=user_id)
+
+    async def get_select(self, user_id: int, content: str | None) -> Select:
+        """
+        获取快捷短语列表查询表达式
+
+        :param user_id: 用户 ID
+        :param content: 短语内容
+        :return:
+        """
+        filters = {'user_id': user_id}
+
+        if content is not None:
+            filters['content__like'] = f'%{content}%'
+
+        return await self.select_order('sort', 'asc', **filters)
 
     async def get_all_by_user_id(self, db: AsyncSession, user_id: int) -> Sequence[AIQuickPhrase]:
         """

@@ -1,8 +1,10 @@
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.exception import errors
+from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_quick_phrase import ai_quick_phrase_dao
 from backend.plugin.ai.model import AIQuickPhrase
 from backend.plugin.ai.schema.quick_phrase import (
@@ -39,6 +41,19 @@ class AIQuickPhraseService:
         :return:
         """
         return await ai_quick_phrase_dao.get_all_by_user_id(db, user_id)
+
+    @staticmethod
+    async def get_list(*, db: AsyncSession, user_id: int, content: str | None) -> dict[str, Any]:
+        """
+        获取当前用户快捷短语列表
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param content: 短语内容
+        :return:
+        """
+        quick_phrase_select = await ai_quick_phrase_dao.get_select(user_id, content)
+        return await paging_data(db, quick_phrase_select)
 
     @staticmethod
     async def create(*, db: AsyncSession, obj: CreateAIQuickPhraseParam, user_id: int) -> None:

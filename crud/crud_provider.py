@@ -19,9 +19,25 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         """
         return await self.select_model(db, pk)
 
-    async def get_select(self) -> Select:
-        """获取供应商列表查询表达式"""
-        return await self.select_order('id', 'desc')
+    async def get_select(self, name: str | None, type: int | None, status: int | None) -> Select:
+        """
+        获取供应商列表查询表达式
+
+        :param name: 供应商名称
+        :param type: 供应商类型
+        :param status: 状态
+        :return:
+        """
+        filters = {}
+
+        if name is not None:
+            filters['name__like'] = f'%{name}%'
+        if type is not None:
+            filters['type'] = type
+        if status is not None:
+            filters['status'] = status
+
+        return await self.select_order('id', 'desc', **filters)
 
     async def get_all(self, db: AsyncSession) -> Sequence[AIProvider]:
         """

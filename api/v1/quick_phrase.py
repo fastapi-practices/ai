@@ -1,7 +1,8 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Request
+from fastapi import APIRouter, Path, Query, Request
 
+from backend.common.pagination import DependsPagination, PageData
 from backend.common.response.response_schema import ResponseModel, ResponseSchemaModel, response_base
 from backend.common.security.jwt import DependsJwtAuth
 from backend.database.db import CurrentSession, CurrentSessionTransaction
@@ -13,6 +14,23 @@ from backend.plugin.ai.schema.quick_phrase import (
 from backend.plugin.ai.service.quick_phrase_service import ai_quick_phrase_service
 
 router = APIRouter()
+
+
+@router.get(
+    '',
+    summary='分页获取快捷短语',
+    dependencies=[
+        DependsJwtAuth,
+        DependsPagination,
+    ],
+)
+async def get_ai_quick_phrases_paginated(
+    request: Request,
+    db: CurrentSession,
+    content: Annotated[str | None, Query(description='短语内容')] = None,
+) -> ResponseSchemaModel[PageData[GetAIQuickPhraseDetail]]:
+    page_data = await ai_quick_phrase_service.get_list(db=db, user_id=request.user.id, content=content)
+    return response_base.success(data=page_data)
 
 
 @router.get('/all', summary='获取快捷短语列表', dependencies=[DependsJwtAuth])
