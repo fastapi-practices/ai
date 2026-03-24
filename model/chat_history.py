@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 import sqlalchemy as sa
 
@@ -19,4 +20,4 @@ class AIChatHistory(Base):
     provider_id: Mapped[int] = mapped_column(sa.BigInteger, comment='供应商 ID')
     model_id: Mapped[str] = mapped_column(sa.String(512), comment='模型 ID')
     pinned_time: Mapped[datetime | None] = mapped_column(TimeZone, default=None, comment='置顶时间')
-    messages: Mapped[list[dict[str, object]] | None] = mapped_column(sa.JSON(), default=None, comment='对话消息历史')
+    messages: Mapped[list[dict[str, Any]] | None] = mapped_column(sa.JSON(), default=None, comment='对话消息历史')

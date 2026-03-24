@@ -124,7 +124,7 @@ async def clear_ai_chat_messages(
 
 @router.delete(
     '/conversations/{conversation_id}/messages/{message_index}',
-    summary='删除指定聊天消息及其后续历史',
+    summary='删除指定聊天消息',
     dependencies=[DependsJwtAuth],
 )
 async def delete_ai_chat_message(

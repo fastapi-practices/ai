@@ -17,6 +17,7 @@ from backend.plugin.ai.schema.chat_history import (
 )
 from backend.plugin.ai.utils.message_parse import (
     build_chat_transcript,
+    delete_model_message_by_index,
     get_chat_transcript_item,
     parse_model_messages,
     serialize_model_messages,
@@ -277,7 +278,7 @@ class AIChatHistoryService:
         message_index: int,
     ) -> DeleteAIChatMessageResult:
         """
-        删除指定聊天消息及其后续历史
+        删除指定聊天消息
 
         :param db: 数据库会话
         :param conversation_id: 会话 ID
@@ -287,12 +288,12 @@ class AIChatHistoryService:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
         model_messages = parse_model_messages(chat_history.messages)
-        truncated_messages = truncate_model_messages_by_index(
+        remaining_messages = delete_model_message_by_index(
             model_messages,
             message_index=message_index,
             conversation_id=chat_history.conversation_id,
         )
-        if not truncated_messages:
+        if not remaining_messages:
             await ai_chat_history_dao.delete_by_conversation_id(db, conversation_id, user_id)
             return DeleteAIChatMessageResult(deleted_conversation=True, remaining_message_count=0)
 
@@ -303,11 +304,11 @@ class AIChatHistoryService:
             model_id=chat_history.model_id,
             user_id=chat_history.user_id,
             pinned_time=chat_history.pinned_time,
-            messages=serialize_model_messages(truncated_messages),
+            messages=serialize_model_messages(remaining_messages),
         )
         await ai_chat_history_dao.update(db, chat_history.id, payload)
         remaining_message_count = len(
-            build_chat_transcript(truncated_messages, conversation_id=chat_history.conversation_id)
+            build_chat_transcript(remaining_messages, conversation_id=chat_history.conversation_id)
         )
         return DeleteAIChatMessageResult(
             deleted_conversation=False,

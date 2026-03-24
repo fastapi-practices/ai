@@ -41,3 +41,5 @@ class GetAIChatMessageDetail(SchemaBase):
     timestamp: str = Field(description='消息时间')
     content: str = Field(description='消息内容')
     conversation_id: str | None = Field(default=None, description='会话 ID')
+    is_error: bool = Field(default=False, description='是否为错误消息')
+    error_message: str | None = Field(default=None, description='错误详情')

@@ -18,6 +18,8 @@ class ChatMessage(TypedDict):
     timestamp: str
     content: str
     conversation_id: str | None
+    is_error: bool
+    error_message: str | None
 
 
 @dataclass(slots=True)
@@ -30,6 +32,8 @@ class ChatTranscriptItem:
     timestamp: str
     content: str
     conversation_id: str | None
+    is_error: bool = False
+    error_message: str | None = None
 
     def to_chat_message(self) -> ChatMessage:
         return {
@@ -38,6 +42,8 @@ class ChatTranscriptItem:
             'timestamp': self.timestamp,
             'content': self.content,
             'conversation_id': self.conversation_id,
+            'is_error': self.is_error,
+            'error_message': self.error_message,
         }
 
 
@@ -48,6 +54,8 @@ def make_chat_message(
     content: str,
     timestamp: datetime | None = None,
     conversation_id: str | None = None,
+    is_error: bool = False,
+    error_message: str | None = None,
 ) -> ChatMessage:
     return {
         'message_index': message_index,
@@ -55,6 +63,8 @@ def make_chat_message(
         'timestamp': (timestamp or timezone.now()).isoformat(),
         'content': content,
         'conversation_id': conversation_id,
+        'is_error': is_error,
+        'error_message': error_message,
     }
 
 
@@ -64,6 +74,12 @@ def to_chat_message(
     message_index: int,
     conversation_id: str | None = None,
 ) -> ChatMessage:
+    metadata = message.metadata or {}
+    is_error = bool(metadata.get('is_error', False))
+    error_message = metadata.get('error_message')
+    if error_message is not None:
+        error_message = str(error_message)
+
     first_part = message.parts[0]
     if isinstance(message, ModelRequest):
         if isinstance(first_part, UserPromptPart):
@@ -74,6 +90,8 @@ def to_chat_message(
                 timestamp=first_part.timestamp,
                 content=first_part.content,
                 conversation_id=conversation_id,
+                is_error=is_error,
+                error_message=error_message,
             )
     elif isinstance(message, ModelResponse) and isinstance(first_part, TextPart):
         return make_chat_message(
@@ -82,6 +100,8 @@ def to_chat_message(
             timestamp=message.timestamp,
             content=first_part.content,
             conversation_id=conversation_id,
+            is_error=is_error,
+            error_message=error_message,
         )
     raise errors.NotFoundError(msg=f'消息类型错误: {message}')
 
@@ -110,6 +130,8 @@ def build_chat_transcript(
                     timestamp=parsed_message['timestamp'],
                     content=parsed_message['content'],
                     conversation_id=parsed_message['conversation_id'],
+                    is_error=parsed_message['is_error'],
+                    error_message=parsed_message['error_message'],
                 )
             )
     return transcript
@@ -139,6 +161,18 @@ def truncate_model_messages_by_index(
 ) -> list[ModelMessage]:
     target_item = get_chat_transcript_item(messages, message_index=message_index, conversation_id=conversation_id)
     return list(messages[: target_item.model_message_index])
+
+
+def delete_model_message_by_index(
+    messages: Sequence[ModelMessage],
+    *,
+    message_index: int,
+    conversation_id: str | None = None,
+) -> list[ModelMessage]:
+    target_item = get_chat_transcript_item(messages, message_index=message_index, conversation_id=conversation_id)
+    remaining_messages = list(messages)
+    del remaining_messages[target_item.model_message_index]
+    return remaining_messages
 
 
 def parse_model_messages(messages: object | None) -> list[ModelMessage]:

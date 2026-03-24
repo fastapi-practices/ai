@@ -3,10 +3,12 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from pydantic_ai import ModelResponse, TextPart
+from pydantic_ai import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.exception import errors
+from backend.common.log import log
 from backend.database.db import uuid4_str
 from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
@@ -100,13 +102,12 @@ class ChatService:
                 raise errors.RequestError(msg='用户提示词不能为空')
         assert prompt is not None
 
-        if should_emit_user_message:
-            yield (
+        def _dump_message(model_message: ModelRequest | ModelResponse, *, message_index: int) -> bytes:
+            return (
                 json.dumps(
-                    make_chat_message(
-                        message_index=next_message_index,
-                        role='user',
-                        content=prompt,
+                    to_chat_message(
+                        model_message,
+                        message_index=message_index,
                         conversation_id=conversation_id,
                     ),
                     ensure_ascii=False,
@@ -114,8 +115,42 @@ class ChatService:
                 + b'\n'
             )
 
+        def _build_title() -> str:
+            title = chat_history.title if chat_history else ' '.join(prompt.split())
+            if not title:
+                return '新会话'
+            if len(title) > 256:
+                return title[:253] + '...'
+            return title
+
+        async def _save_history(messages: list[dict[str, object]]) -> None:
+            payload = {
+                'conversation_id': conversation_id,
+                'title': _build_title(),
+                'provider_id': chat.provider_id,
+                'model_id': chat.model_id,
+                'user_id': chat_history.user_id if chat_history else user_id,
+                'pinned_time': chat_history.pinned_time if chat_history else None,
+                'messages': messages,
+            }
+            if chat_history:
+                await ai_chat_history_dao.update(db, chat_history.id, UpdateAIChatHistoryParam(**payload))
+            else:
+                await ai_chat_history_dao.create(db, CreateAIChatHistoryParam(**payload))
+
+        if should_emit_user_message:
+            yield json.dumps(
+                make_chat_message(
+                    message_index=next_message_index,
+                    role='user',
+                    content=prompt,
+                    conversation_id=conversation_id,
+                ),
+                ensure_ascii=False,
+            ).encode('utf-8') + b'\n'
+
         model_settings = build_model_settings(chat=chat, provider_type=provider.type)
-        run_kwargs = {
+        run_kwargs: dict[str, Any] = {
             'model': get_pydantic_model(
                 provider_type=provider.type,
                 model_name=model.model_id,
@@ -128,42 +163,37 @@ class ChatService:
         if message_history:
             run_kwargs['message_history'] = message_history
 
-        async with chat_agent.run_stream(
-            prompt,
-            **run_kwargs,
-        ) as result:
-            async for text in result.stream_output(debounce_by=0.01):
-                message = ModelResponse(parts=[TextPart(text)], model_name=model.model_id, timestamp=result.timestamp())
-                yield (
-                    json.dumps(
-                        to_chat_message(
-                            message,
-                            message_index=next_message_index + 1,
-                            conversation_id=conversation_id,
-                        ),
-                        ensure_ascii=False,
-                    ).encode('utf-8')
-                    + b'\n'
-                )
+        try:
+            async with chat_agent.run_stream(
+                prompt,
+                **run_kwargs,
+            ) as result:
+                async for text in result.stream_output(debounce_by=0.01):
+                    response_message = ModelResponse(
+                        parts=[TextPart(text)],
+                        model_name=model.model_id,
+                        timestamp=result.timestamp(),
+                    )
+                    yield _dump_message(response_message, message_index=next_message_index + 1)
 
-            title = chat_history.title if chat_history else ' '.join(prompt.split())
-            if not title:
-                title = '新会话'
-            elif len(title) > 256:
-                title = title[:253] + '...'
-            payload = {
-                'conversation_id': conversation_id,
-                'title': title,
-                'provider_id': chat.provider_id,
-                'model_id': chat.model_id,
-                'user_id': chat_history.user_id if chat_history else user_id,
-                'pinned_time': chat_history.pinned_time if chat_history else None,
-                'messages': serialize_model_messages(result.all_messages()),
-            }
-            if chat_history:
-                await ai_chat_history_dao.update(db, chat_history.id, UpdateAIChatHistoryParam(**payload))
-            else:
-                await ai_chat_history_dao.create(db, CreateAIChatHistoryParam(**payload))
+                await _save_history(serialize_model_messages(result.all_messages()))
+        except UnexpectedModelBehavior as e:
+            log.warning(f'聊天模型流式响应异常，已降级为空响应提示: conversation_id={conversation_id}, error={e}')
+            failure_message = '模型返回了空响应，请稍后重试或更换模型。'
+            failure_response = ModelResponse(
+                parts=[TextPart(failure_message)],
+                model_name=model.model_id,
+                metadata={
+                    'is_error': True,
+                    'error_message': str(e),
+                },
+            )
+            persisted_messages = [*message_history]
+            if should_emit_user_message:
+                persisted_messages.append(ModelRequest(parts=[UserPromptPart(prompt)]))
+            persisted_messages.append(failure_response)
+            yield _dump_message(failure_response, message_index=next_message_index + 1)
+            await _save_history(serialize_model_messages(persisted_messages))
 
 
 ai_chat_service: ChatService = ChatService()
