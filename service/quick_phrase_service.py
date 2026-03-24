@@ -65,14 +65,20 @@ class AIQuickPhraseService:
         :param user_id: 用户 ID
         :return:
         """
+        title = obj.title.strip()
+        if not title:
+            raise errors.RequestError(msg='快捷短语标题不能为空')
         content = obj.content.strip()
         if not content:
             raise errors.RequestError(msg='快捷短语内容不能为空')
-        if len(content) > 100:
-            raise errors.RequestError(msg='快捷短语内容过长')
-        await ai_quick_phrase_dao.create(db, obj.model_copy(update={'content': content}), user_id)
+        await ai_quick_phrase_dao.create(
+            db,
+            obj.model_copy(update={'title': title, 'content': content}),
+            user_id,
+        )
 
-    async def update(self, *, db: AsyncSession, pk: int, obj: UpdateAIQuickPhraseParam, user_id: int) -> int:
+    @staticmethod
+    async def update(*, db: AsyncSession, pk: int, obj: UpdateAIQuickPhraseParam, user_id: int) -> int:
         """
         更新快捷短语
 
@@ -82,15 +88,23 @@ class AIQuickPhraseService:
         :param user_id: 用户 ID
         :return:
         """
-        await self.get(db=db, pk=pk, user_id=user_id)
+        quick_phrase = await ai_quick_phrase_dao.get_by_id_and_user_id(db, pk, user_id)
+        if not quick_phrase:
+            raise errors.NotFoundError(msg='快捷短语不存在')
+        title = obj.title.strip()
+        if not title:
+            raise errors.RequestError(msg='快捷短语标题不能为空')
         content = obj.content.strip()
         if not content:
             raise errors.RequestError(msg='快捷短语内容不能为空')
-        if len(content) > 100:
-            raise errors.RequestError(msg='快捷短语内容过长')
-        return await ai_quick_phrase_dao.update(db, pk, obj.model_copy(update={'content': content}))
+        return await ai_quick_phrase_dao.update(
+            db,
+            pk,
+            obj.model_copy(update={'title': title, 'content': content}),
+        )
 
-    async def delete(self, *, db: AsyncSession, pk: int, user_id: int) -> int:
+    @staticmethod
+    async def delete(*, db: AsyncSession, pk: int, user_id: int) -> int:
         """
         删除快捷短语
 
@@ -99,7 +113,6 @@ class AIQuickPhraseService:
         :param user_id: 用户 ID
         :return:
         """
-        await self.get(db=db, pk=pk, user_id=user_id)
         return await ai_quick_phrase_dao.delete(db, pk, user_id)
 
 
