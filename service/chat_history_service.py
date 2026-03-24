@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.exception import errors
+from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
 from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
 from backend.plugin.ai.model import AIChatHistory
 from backend.plugin.ai.schema.chat import GetAIChatMessageDetail
@@ -20,7 +21,6 @@ from backend.plugin.ai.utils.message_parse import (
     delete_model_message_by_index,
     get_chat_transcript_item,
     parse_model_messages,
-    serialize_model_messages,
     to_chat_messages,
     truncate_model_messages_by_index,
 )
@@ -69,9 +69,10 @@ class AIChatHistoryService:
         visible_chat_histories = chat_histories[:limit]
         items = []
         for chat_history in visible_chat_histories:
+            message_rows = await ai_chat_message_dao.get_all_by_conversation_id(db, chat_history.conversation_id)
             last_activity_time = chat_history.updated_time or chat_history.created_time
             transcript = build_chat_transcript(
-                parse_model_messages(chat_history.messages),
+                parse_model_messages([row.message for row in message_rows]),
                 conversation_id=chat_history.conversation_id,
             )
             last_message = transcript[-1].content if transcript else None
@@ -107,7 +108,8 @@ class AIChatHistoryService:
         :return:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
-        model_messages = parse_model_messages(chat_history.messages)
+        message_rows = await ai_chat_message_dao.get_all_by_conversation_id(db, chat_history.conversation_id)
+        model_messages = parse_model_messages([row.message for row in message_rows])
         messages = [
             GetAIChatMessageDetail.model_validate(message)
             for message in to_chat_messages(model_messages, conversation_id=chat_history.conversation_id)
@@ -160,7 +162,6 @@ class AIChatHistoryService:
             model_id=chat_history.model_id,
             user_id=chat_history.user_id,
             pinned_time=chat_history.pinned_time,
-            messages=chat_history.messages or [],
         )
         return await ai_chat_history_dao.update(db, chat_history.id, payload)
 
@@ -189,7 +190,6 @@ class AIChatHistoryService:
             model_id=chat_history.model_id,
             user_id=chat_history.user_id,
             pinned_time=timezone.now() if obj.is_pinned else None,
-            messages=chat_history.messages or [],
         )
         return await ai_chat_history_dao.update(db, chat_history.id, payload)
 
@@ -211,7 +211,8 @@ class AIChatHistoryService:
         :return:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
-        model_messages = parse_model_messages(chat_history.messages)
+        message_rows = await ai_chat_message_dao.get_all_by_conversation_id(db, chat_history.conversation_id)
+        model_messages = parse_model_messages([row.message for row in message_rows])
         target_item = get_chat_transcript_item(
             model_messages,
             message_index=message_index,
@@ -244,7 +245,8 @@ class AIChatHistoryService:
         :return:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
-        model_messages = parse_model_messages(chat_history.messages)
+        message_rows = await ai_chat_message_dao.get_all_by_conversation_id(db, chat_history.conversation_id)
+        model_messages = parse_model_messages([row.message for row in message_rows])
         target_item = get_chat_transcript_item(
             model_messages,
             message_index=message_index,
@@ -287,24 +289,49 @@ class AIChatHistoryService:
         :return:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
-        model_messages = parse_model_messages(chat_history.messages)
+        message_rows = await ai_chat_message_dao.get_all_by_conversation_id(db, chat_history.conversation_id)
+        model_messages = parse_model_messages([row.message for row in message_rows])
+        target_item = get_chat_transcript_item(
+            model_messages,
+            message_index=message_index,
+            conversation_id=chat_history.conversation_id,
+        )
         remaining_messages = delete_model_message_by_index(
             model_messages,
             message_index=message_index,
             conversation_id=chat_history.conversation_id,
         )
         if not remaining_messages:
+            await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
             await ai_chat_history_dao.delete_by_conversation_id(db, conversation_id, user_id)
             return DeleteAIChatMessageResult(deleted_conversation=True, remaining_message_count=0)
 
+        remaining_message_rows = [
+            row
+            for row in message_rows
+            if row.message_index != target_item.model_message_index
+        ]
+        await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
+        await ai_chat_message_dao.bulk_create(
+            db,
+            [
+                {
+                    'conversation_id': conversation_id,
+                    'provider_id': row.provider_id,
+                    'model_id': row.model_id,
+                    'message_index': index,
+                    'message': row.message,
+                }
+                for index, row in enumerate(remaining_message_rows)
+            ],
+        )
         payload = UpdateAIChatHistoryParam(
             conversation_id=chat_history.conversation_id,
             title=chat_history.title,
-            provider_id=chat_history.provider_id,
-            model_id=chat_history.model_id,
+            provider_id=remaining_message_rows[-1].provider_id,
+            model_id=remaining_message_rows[-1].model_id,
             user_id=chat_history.user_id,
             pinned_time=chat_history.pinned_time,
-            messages=serialize_model_messages(remaining_messages),
         )
         await ai_chat_history_dao.update(db, chat_history.id, payload)
         remaining_message_count = len(
@@ -325,6 +352,7 @@ class AIChatHistoryService:
         :return:
         """
         chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
         payload = UpdateAIChatHistoryParam(
             conversation_id=chat_history.conversation_id,
             title=chat_history.title,
@@ -332,7 +360,6 @@ class AIChatHistoryService:
             model_id=chat_history.model_id,
             user_id=chat_history.user_id,
             pinned_time=chat_history.pinned_time,
-            messages=[],
         )
         return await ai_chat_history_dao.update(db, chat_history.id, payload)
 
@@ -346,6 +373,7 @@ class AIChatHistoryService:
         :return:
         """
         await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
         return await ai_chat_history_dao.delete_by_conversation_id(db, conversation_id, user_id)
 
 

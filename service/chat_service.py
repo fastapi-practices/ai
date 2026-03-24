@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.database.db import uuid4_str
+from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
 from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
@@ -59,6 +60,7 @@ class ChatService:
 
         conversation_id = chat.conversation_id or uuid4_str()
         chat_history = None
+        existing_message_rows = []
         message_history = []
         next_message_index = 0
         prompt = chat.user_prompt
@@ -69,6 +71,7 @@ class ChatService:
                 conversation_id=conversation_id,
                 user_id=user_id,
             )
+            existing_message_rows = list(await ai_chat_message_dao.get_all_by_conversation_id(db, conversation_id))
             if chat.edit_message_index is not None and chat.regenerate_message_index is not None:
                 raise errors.RequestError(msg='编辑重发与重新生成不能同时使用')
             if chat.edit_message_index is not None:
@@ -91,7 +94,7 @@ class ChatService:
             else:
                 if prompt is None:
                     raise errors.RequestError(msg='用户提示词不能为空')
-                message_history = parse_model_messages(chat_history.messages)
+                message_history = parse_model_messages([row.message for row in existing_message_rows])
             next_message_index = len(build_chat_transcript(message_history, conversation_id=conversation_id))
         else:
             if chat.edit_message_index is not None:
@@ -131,12 +134,30 @@ class ChatService:
                 'model_id': chat.model_id,
                 'user_id': chat_history.user_id if chat_history else user_id,
                 'pinned_time': chat_history.pinned_time if chat_history else None,
-                'messages': messages,
             }
             if chat_history:
                 await ai_chat_history_dao.update(db, chat_history.id, UpdateAIChatHistoryParam(**payload))
             else:
                 await ai_chat_history_dao.create(db, CreateAIChatHistoryParam(**payload))
+            await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
+            if messages:
+                await ai_chat_message_dao.bulk_create(
+                    db,
+                    [
+                        {
+                            'conversation_id': conversation_id,
+                            'provider_id': existing_message_rows[index].provider_id
+                            if index < len(message_history) and index < len(existing_message_rows)
+                            else chat.provider_id,
+                            'model_id': existing_message_rows[index].model_id
+                            if index < len(message_history) and index < len(existing_message_rows)
+                            else chat.model_id,
+                            'message_index': index,
+                            'message': message,
+                        }
+                        for index, message in enumerate(messages)
+                    ],
+                )
 
         if should_emit_user_message:
             yield json.dumps(
@@ -178,8 +199,8 @@ class ChatService:
 
                 await _save_history(serialize_model_messages(result.all_messages()))
         except UnexpectedModelBehavior as e:
-            log.warning(f'聊天模型流式响应异常，已降级为空响应提示: conversation_id={conversation_id}, error={e}')
-            failure_message = '模型返回了空响应，请稍后重试或更换模型。'
+            log.warning(f'聊天模型响应异常，已降级为错误提示: conversation_id={conversation_id}, error={e}')
+            failure_message = '服务暂时不可用，请稍后再试'
             failure_response = ModelResponse(
                 parts=[TextPart(failure_message)],
                 model_name=model.model_id,

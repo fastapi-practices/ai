@@ -10,6 +10,16 @@ class AIProviderType(IntEnum):
     xai = 3
     openrouter = 4
 
+    @property
+    def default_api_path(self) -> str:
+        return {
+            AIProviderType.openai: '/v1',
+            AIProviderType.anthropic: '',
+            AIProviderType.google: '/v1beta',
+            AIProviderType.xai: '/v1',
+            AIProviderType.openrouter: '/api/v1',
+        }[self]
+
 
 class McpType(IntEnum):
     """Mcp 类型"""

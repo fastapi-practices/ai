@@ -1,6 +1,6 @@
 from inspect import signature
-from typing import get_args
-from urllib.parse import urlparse
+from typing import Any, cast, get_args
+from urllib.parse import urlparse, urlsplit
 
 from openai import AsyncOpenAI
 from pydantic_ai import ModelSettings
@@ -19,6 +19,9 @@ from pydantic_ai.providers.xai import XaiProvider
 
 from backend.common.exception import errors
 from backend.plugin.ai.enums import AIProviderType
+from backend.plugin.ai.utils.provider_url import normalize_provider_api_host
+
+from xai_sdk import AsyncClient
 
 PydanticAIModel = OpenAIChatModel | AnthropicModel | GoogleModel | XaiModel | OpenRouterModel
 
@@ -42,8 +45,6 @@ OPENAI_COMPATIBLE_PROVIDER_ALIASES: dict[str, frozenset[str]] = {
     'together': frozenset({'together', 'togetherai'}),
     'vercel': frozenset({'vercel'}),
 }
-
-
 def get_pydantic_model(
     provider_type: int,
     model_name: str,
@@ -64,6 +65,7 @@ def get_pydantic_model(
     :return:
     """
     provider_type = AIProviderType(provider_type)
+    base_url = normalize_provider_api_host(provider_type, base_url)
     if provider_type == AIProviderType.openai:
         parsed_url = urlparse(base_url)
         normalized_candidates = [
@@ -87,10 +89,11 @@ def get_pydantic_model(
                 None,
             )
 
-        provider = OpenAIProvider(base_url=base_url, api_key=api_key)
+        openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        provider = OpenAIProvider(openai_client=openai_client)
         if inferred_provider_name not in {None, 'azure'}:
             try:
-                provider_class = infer_provider_class(inferred_provider_name)
+                provider_class = cast(type[Any], infer_provider_class(inferred_provider_name))
                 init_parameters = signature(provider_class.__init__).parameters
                 provider_kwargs = {'api_key': api_key} if 'api_key' in init_parameters else {}
                 if base_url:
@@ -99,7 +102,7 @@ def get_pydantic_model(
                         if 'base_url' in init_parameters
                         else {'api_base': base_url}
                         if 'api_base' in init_parameters
-                        else {'openai_client': AsyncOpenAI(base_url=base_url, api_key=api_key)}
+                        else {'openai_client': openai_client}
                         if 'openai_client' in init_parameters
                         else {}
                     )
@@ -132,9 +135,16 @@ def get_pydantic_model(
         )
 
     if provider_type == AIProviderType.xai:
+        parsed_url = urlsplit(base_url)
         return XaiModel(
             model_name,
-            provider=XaiProvider(api_key=api_key),
+            provider=XaiProvider(
+                xai_client=AsyncClient(
+                    api_key=api_key,
+                    api_host=parsed_url.netloc,
+                    use_insecure_channel=parsed_url.scheme == 'http',
+                )
+            ),
             settings=model_settings,
         )
 

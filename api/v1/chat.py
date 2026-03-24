@@ -27,10 +27,7 @@ async def completions(
     db: CurrentSessionTransaction,
     chat: AIChatParam,
 ) -> StreamingResponse:
-    return StreamingResponse(
-        ai_chat_service.stream_messages(db=db, chat=chat, user_id=request.user.id),
-        media_type='application/x-ndjson',
-    )
+    return StreamingResponse(ai_chat_service.stream_messages(db=db, chat=chat, user_id=request.user.id))
 
 
 @router.get('/conversations', summary='获取最近聊天历史', dependencies=[DependsJwtAuth])

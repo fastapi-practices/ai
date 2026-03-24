@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -21,6 +22,7 @@ from backend.plugin.ai.schema.provider import (
     GetAIProviderModelDetail,
     UpdateAIProviderParam,
 )
+from backend.plugin.ai.utils.provider_url import normalize_provider_api_host
 from backend.utils.timezone import timezone
 
 
@@ -46,7 +48,7 @@ class AIProviderService:
             raise errors.RequestError(msg='当前供应商已停用，无法获取模型列表')
         if ai_provider.type not in {AIProviderType.openai, AIProviderType.xai, AIProviderType.openrouter}:
             raise errors.RequestError(msg='当前供应商暂不支持自动同步模型，请手动维护模型列表')
-        url = f'{ai_provider.api_host}/v1/models'
+        url = f'{normalize_provider_api_host(ai_provider.type, ai_provider.api_host)}/models'
         headers = {'Authorization': f'Bearer {ai_provider.api_key}'}
         async with httpx.AsyncClient(timeout=10) as client:
             try:
@@ -134,7 +136,9 @@ class AIProviderService:
         :param obj: 创建供应商参数
         :return:
         """
-        obj = obj.model_copy(update={'api_host': obj.api_host.rstrip('/')})
+        parsed = urlsplit(obj.api_host.strip())
+        if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+            raise errors.RequestError(msg='API Host 必须是合法的 HTTP(S) 地址')
         await ai_provider_dao.create(db, obj)
 
     @staticmethod
@@ -150,7 +154,9 @@ class AIProviderService:
         ai_provider = await ai_provider_dao.get(db, pk)
         if not ai_provider:
             raise errors.NotFoundError(msg='供应商不存在')
-        obj = obj.model_copy(update={'api_host': obj.api_host.rstrip('/')})
+        parsed = urlsplit(obj.api_host.strip())
+        if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+            raise errors.RequestError(msg='API Host 必须是合法的 HTTP(S) 地址')
         return await ai_provider_dao.update(db, pk, obj)
 
     @staticmethod

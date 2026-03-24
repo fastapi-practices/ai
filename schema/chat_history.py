@@ -15,7 +15,6 @@ class AIChatHistorySchemaBase(SchemaBase):
     model_id: str = Field(description='模型 ID')
     user_id: int = Field(description='用户 ID')
     pinned_time: datetime | None = Field(default=None, description='置顶时间')
-    messages: list[dict[str, object]] = Field(description='对话消息历史')
 
 
 class CreateAIChatHistoryParam(AIChatHistorySchemaBase):
