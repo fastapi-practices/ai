@@ -4,6 +4,7 @@ from sqlalchemy import Select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy_crud_plus import CRUDPlus
 
+from backend.common.enums import StatusType
 from backend.plugin.ai.model import AIProvider
 from backend.plugin.ai.schema.provider import CreateAIProviderParam, UpdateAIProviderParam
 
@@ -46,7 +47,7 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param db: 数据库会话
         :return:
         """
-        return await self.select_models(db)
+        return await self.select_models(db, status=StatusType.enable)
 
     async def create(self, db: AsyncSession, obj: CreateAIProviderParam) -> None:
         """

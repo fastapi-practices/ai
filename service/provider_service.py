@@ -42,6 +42,8 @@ class AIProviderService:
     async def get_models(self, *, db: AsyncSession, pk: int) -> list[GetAIProviderModelDetail]:
         """获取供应商模型"""
         ai_provider = await self.get(db=db, pk=pk)
+        if ai_provider.status != StatusType.enable:
+            raise errors.RequestError(msg='当前供应商已停用，无法获取模型列表')
         if ai_provider.type not in {AIProviderType.openai, AIProviderType.xai, AIProviderType.openrouter}:
             raise errors.RequestError(msg='当前供应商暂不支持自动同步模型，请手动维护模型列表')
         url = f'{ai_provider.api_host}/v1/models'
@@ -70,6 +72,8 @@ class AIProviderService:
         :param pk: 供应商 ID
         :return:
         """
+        existing_models = await ai_model_dao.get_all(db, provider_id=pk)
+        existing_status = {model.model_id: model.status for model in existing_models}
         provider_models = await self.get_models(db=db, pk=pk)
         await ai_model_dao.delete_by_provider(db, pk)
         if not provider_models:
@@ -82,7 +86,7 @@ class AIProviderService:
                     **CreateAIModelParam(
                         provider_id=pk,
                         model_id=obj.id,
-                        status=StatusType.enable,
+                        status=existing_status.get(obj.id, StatusType.enable),  # type: ignore
                     ).model_dump(),
                     'created_time': timezone.now(),
                 }

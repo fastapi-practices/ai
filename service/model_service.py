@@ -3,6 +3,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.common.enums import StatusType
 from backend.common.exception import errors
 from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_model import ai_model_dao
@@ -56,7 +57,7 @@ class AIModelService:
         :param provider_id: 供应商 ID
         :return:
         """
-        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id)
+        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable)
         return ai_models
 
     @staticmethod

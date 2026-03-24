@@ -51,15 +51,21 @@ class CRUDAIModel(CRUDPlus[AIModel]):
 
         return await self.select_order('id', 'desc', **filters)
 
-    async def get_all(self, db: AsyncSession, provider_id: int) -> Sequence[AIModel]:
+    async def get_all(self, db: AsyncSession, provider_id: int, *, status: int | None = None) -> Sequence[AIModel]:
         """
         获取所有模型
 
         :param db: 数据库会话
         :param provider_id: 供应商 ID
+        :param status: 状态
         :return:
         """
-        return await self.select_models(db, provider_id=provider_id)
+        filters = {'provider_id': provider_id}
+
+        if status is not None:
+            filters['status'] = status
+
+        return await self.select_models(db, **filters)
 
     async def create(self, db: AsyncSession, obj: CreateAIModelParam) -> None:
         """
