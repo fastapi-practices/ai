@@ -1,10 +1,8 @@
-from collections.abc import Sequence
-from datetime import datetime
-
 import sqlalchemy as sa
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.plugin.ai.model import AIChatHistory
@@ -32,32 +30,16 @@ class CRUDAIChatHistory(CRUDPlus[AIChatHistory]):
         """
         return await self.select_model_by_column(db, conversation_id=conversation_id)
 
-    async def get_recent_list(
-        self,
-        db: AsyncSession,
-        user_id: int,
-        limit: int,
-        before: datetime | None = None,
-    ) -> Sequence[AIChatHistory]:
+    async def get_select(self, user_id: int) -> Select[tuple[AIChatHistory]]:
         """
-        获取最近聊天历史列表
+        获取聊天历史列表查询表达式
 
-        :param db: 数据库会话
         :param user_id: 用户 ID
-        :param limit: 返回数量
-        :param before: 查询游标
         :return:
         """
-        activity_time = func.coalesce(self.model.updated_time, self.model.created_time)
         stmt = select(self.model).where(self.model.user_id == user_id)
-        if before is not None:
-            stmt = stmt.where(activity_time < before)
         pinned_first = sa.case((self.model.pinned_time.is_(None), 1), else_=0)
-        stmt = stmt.order_by(
-            pinned_first, desc(activity_time), desc(self.model.pinned_time), desc(self.model.created_time)
-        ).limit(limit + 1)
-        result = await db.execute(stmt)
-        return result.scalars().all()
+        return stmt.order_by(pinned_first, desc(self.model.id))
 
     async def create(self, db: AsyncSession, obj: CreateAIChatHistoryParam) -> None:
         """
@@ -80,7 +62,7 @@ class CRUDAIChatHistory(CRUDPlus[AIChatHistory]):
         """
         return await self.update_model(db, pk, obj)
 
-    async def delete_by_conversation_id(self, db: AsyncSession, conversation_id: str, user_id: int) -> int:
+    async def delete(self, db: AsyncSession, conversation_id: str, user_id: int) -> int:
         """
         通过会话 ID 删除聊天历史
 

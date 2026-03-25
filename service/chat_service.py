@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.database.db import uuid4_str
-from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
 from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
+from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.schema.chat import AIChatParam
@@ -71,7 +71,7 @@ class ChatService:
                 conversation_id=conversation_id,
                 user_id=user_id,
             )
-            existing_message_rows = list(await ai_chat_message_dao.get_all_by_conversation_id(db, conversation_id))
+            existing_message_rows = list(await ai_chat_message_dao.get_all(db, conversation_id))
             if chat.edit_message_index is not None and chat.regenerate_message_index is not None:
                 raise errors.RequestError(msg='编辑重发与重新生成不能同时使用')
             if chat.edit_message_index is not None:
@@ -139,7 +139,7 @@ class ChatService:
                 await ai_chat_history_dao.update(db, chat_history.id, UpdateAIChatHistoryParam(**payload))
             else:
                 await ai_chat_history_dao.create(db, CreateAIChatHistoryParam(**payload))
-            await ai_chat_message_dao.delete_by_conversation_id(db, conversation_id)
+            await ai_chat_message_dao.delete(db, conversation_id)
             if messages:
                 await ai_chat_message_dao.bulk_create(
                     db,

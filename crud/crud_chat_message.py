@@ -9,7 +9,7 @@ from backend.plugin.ai.model import AIChatMessage
 
 
 class CRUDAIChatMessage(CRUDPlus[AIChatMessage]):
-    async def get_all_by_conversation_id(self, db: AsyncSession, conversation_id: str) -> Sequence[AIChatMessage]:
+    async def get_all(self, db: AsyncSession, conversation_id: str) -> Sequence[AIChatMessage]:
         """
         获取会话全部消息
 
@@ -19,7 +19,7 @@ class CRUDAIChatMessage(CRUDPlus[AIChatMessage]):
         """
         return await self.select_models_order(db, 'message_index', 'asc', conversation_id=conversation_id)
 
-    async def get_select_by_conversation_id(self, conversation_id: str) -> Select:
+    async def get_select(self, conversation_id: str) -> Select:
         """
         获取会话消息查询表达式
 
@@ -38,7 +38,7 @@ class CRUDAIChatMessage(CRUDPlus[AIChatMessage]):
         """
         await self.bulk_create_models(db, objs)
 
-    async def delete_by_conversation_id(self, db: AsyncSession, conversation_id: str) -> int:
+    async def delete(self, db: AsyncSession, conversation_id: str) -> int:
         """
         删除会话全部消息
 

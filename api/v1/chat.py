@@ -1,9 +1,9 @@
-from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, Request
+from fastapi import APIRouter, Path, Request
 from starlette.responses import StreamingResponse
 
+from backend.common.pagination import CursorPageData, DependsCursorPagination
 from backend.common.response.response_schema import ResponseModel, ResponseSchemaModel, response_base
 from backend.common.security.jwt import DependsJwtAuth
 from backend.database.db import CurrentSession, CurrentSessionTransaction
@@ -11,7 +11,7 @@ from backend.plugin.ai.schema.chat import AIChatParam
 from backend.plugin.ai.schema.chat_history import (
     DeleteAIChatMessageResult,
     GetAIChatConversationDetail,
-    GetAIChatConversationList,
+    GetAIChatConversationListItem,
     UpdateAIChatConversationParam,
     UpdateAIChatConversationPinParam,
 )
@@ -22,7 +22,7 @@ router = APIRouter()
 
 
 @router.post('/completions', summary='文本生成（对话）', dependencies=[DependsJwtAuth])
-async def completions(
+async def create_ai_chat_completion(
     request: Request,
     db: CurrentSessionTransaction,
     chat: AIChatParam,
@@ -30,14 +30,19 @@ async def completions(
     return StreamingResponse(ai_chat_service.stream_messages(db=db, chat=chat, user_id=request.user.id))
 
 
-@router.get('/conversations', summary='获取最近聊天历史', dependencies=[DependsJwtAuth])
-async def get_ai_chat_conversations(
+@router.get(
+    '/conversations',
+    summary='分页获取聊天话题',
+    dependencies=[
+        DependsJwtAuth,
+        DependsCursorPagination,
+    ],
+)
+async def get_ai_chat_conversations_paginated(
     request: Request,
     db: CurrentSession,
-    limit: Annotated[int, Query(ge=1, le=100, description='返回数量')] = 20,
-    before: Annotated[datetime | None, Query(description='查询游标，取该时间之前的会话')] = None,
-) -> ResponseSchemaModel[GetAIChatConversationList]:
-    data = await ai_chat_history_service.get_recent_list(db=db, user_id=request.user.id, limit=limit, before=before)
+) -> ResponseSchemaModel[CursorPageData[GetAIChatConversationListItem]]:
+    data = await ai_chat_history_service.get_list(db=db, user_id=request.user.id)
     return response_base.success(data=data)
 
 
@@ -70,13 +75,13 @@ async def update_ai_chat_conversation(
 
 
 @router.put('/conversations/{conversation_id}/pin', summary='置顶聊天话题', dependencies=[DependsJwtAuth])
-async def update_ai_chat_conversation_pin(
+async def update_ai_chat_conversation_pinned_status(
     request: Request,
     db: CurrentSessionTransaction,
     conversation_id: Annotated[str, Path(description='会话 ID')],
     obj: UpdateAIChatConversationPinParam,
 ) -> ResponseModel:
-    count = await ai_chat_history_service.update_pin(
+    count = await ai_chat_history_service.update_pinned_status(
         db=db,
         conversation_id=conversation_id,
         user_id=request.user.id,
@@ -104,7 +109,7 @@ async def delete_ai_chat_conversation(
     summary='清空话题对话历史',
     dependencies=[DependsJwtAuth],
 )
-async def clear_ai_chat_messages(
+async def clear_ai_chat_conversation_messages(
     request: Request,
     db: CurrentSessionTransaction,
     conversation_id: Annotated[str, Path(description='会话 ID')],
@@ -124,7 +129,7 @@ async def clear_ai_chat_messages(
     summary='删除指定聊天消息',
     dependencies=[DependsJwtAuth],
 )
-async def delete_ai_chat_message(
+async def delete_ai_chat_conversation_message(
     request: Request,
     db: CurrentSessionTransaction,
     conversation_id: Annotated[str, Path(description='会话 ID')],

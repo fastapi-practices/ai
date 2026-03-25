@@ -30,8 +30,8 @@ async def get_all_ai_providers(db: CurrentSession) -> ResponseSchemaModel[list[G
 async def get_ai_provider(
     db: CurrentSession, pk: Annotated[int, Path(description='provider ID')]
 ) -> ResponseSchemaModel[GetAIProviderDetail]:
-    ai_provider = await ai_provider_service.get(db=db, pk=pk)
-    return response_base.success(data=ai_provider)
+    data = await ai_provider_service.get(db=db, pk=pk)
+    return response_base.success(data=data)
 
 
 @router.get('/{pk}/models', summary='获取供应商模型列表', dependencies=[DependsJwtAuth])
@@ -39,8 +39,8 @@ async def get_ai_provider_models(
     db: CurrentSession,
     pk: Annotated[int, Path(description='provider ID')],
 ) -> ResponseSchemaModel[list[GetAIProviderModelDetail]]:
-    ai_provider_models = await ai_provider_service.get_models(db=db, pk=pk)
-    return response_base.success(data=ai_provider_models)
+    data = await ai_provider_service.get_models(db=db, pk=pk)
+    return response_base.success(data=data)
 
 
 @router.get('/{pk}/models/sync', summary='同步供应商模型', dependencies=[DependsJwtAuth])

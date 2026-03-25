@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic_ai import ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_core import to_jsonable_python
@@ -181,7 +181,7 @@ def parse_model_messages(messages: object | None) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_python(messages)
 
 
-def serialize_model_messages(messages: Sequence[ModelMessage]) -> list[dict[str, object]]:
+def serialize_model_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
     payload = to_jsonable_python(list(messages))
     assert isinstance(payload, list)
     return payload

@@ -47,7 +47,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
 
         return await self.select_order('sort', 'asc', **filters)
 
-    async def get_all_by_user_id(self, db: AsyncSession, user_id: int) -> Sequence[AIQuickPhrase]:
+    async def get_all(self, db: AsyncSession, user_id: int) -> Sequence[AIQuickPhrase]:
         """
         获取当前用户的所有快捷短语
 

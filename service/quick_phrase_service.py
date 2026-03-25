@@ -40,7 +40,7 @@ class AIQuickPhraseService:
         :param user_id: 用户 ID
         :return:
         """
-        return await ai_quick_phrase_dao.get_all_by_user_id(db, user_id)
+        return await ai_quick_phrase_dao.get_all(db, user_id)
 
     @staticmethod
     async def get_list(*, db: AsyncSession, user_id: int, content: str | None) -> dict[str, Any]:

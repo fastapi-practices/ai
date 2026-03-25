@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get('/all', summary='获取快捷短语列表', dependencies=[DependsJwtAuth])
-async def get_ai_quick_phrases(
+async def get_all_ai_quick_phrases(
     request: Request, db: CurrentSession
 ) -> ResponseSchemaModel[list[GetAIQuickPhraseDetail]]:
     data = await ai_quick_phrase_service.get_all(db=db, user_id=request.user.id)

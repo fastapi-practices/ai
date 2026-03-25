@@ -31,8 +31,8 @@ async def get_all_ai_models(
 async def get_ai_model(
     db: CurrentSession, pk: Annotated[int, Path(description='模型 ID')]
 ) -> ResponseSchemaModel[GetAIModelDetail]:
-    ai_model = await ai_model_service.get(db=db, pk=pk)
-    return response_base.success(data=ai_model)
+    data = await ai_model_service.get(db=db, pk=pk)
+    return response_base.success(data=data)
 
 
 @router.get(

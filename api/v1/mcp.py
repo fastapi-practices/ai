@@ -24,8 +24,8 @@ async def get_all_mcps(db: CurrentSession) -> ResponseSchemaModel[list[GetMcpDet
 async def get_mcp(
     db: CurrentSession, pk: Annotated[int, Path(description='MCP ID')]
 ) -> ResponseSchemaModel[GetMcpDetail]:
-    mcp = await mcp_service.get(db=db, pk=pk)
-    return response_base.success(data=mcp)
+    data = await mcp_service.get(db=db, pk=pk)
+    return response_base.success(data=data)
 
 
 @router.get(

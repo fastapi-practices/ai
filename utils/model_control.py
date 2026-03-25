@@ -16,12 +16,11 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.providers.xai import XaiProvider
+from xai_sdk import AsyncClient
 
 from backend.common.exception import errors
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.utils.provider_url import normalize_provider_api_host
-
-from xai_sdk import AsyncClient
 
 PydanticAIModel = OpenAIChatModel | AnthropicModel | GoogleModel | XaiModel | OpenRouterModel
 
@@ -45,6 +44,8 @@ OPENAI_COMPATIBLE_PROVIDER_ALIASES: dict[str, frozenset[str]] = {
     'together': frozenset({'together', 'togetherai'}),
     'vercel': frozenset({'vercel'}),
 }
+
+
 def get_pydantic_model(
     provider_type: int,
     model_name: str,
@@ -93,7 +94,7 @@ def get_pydantic_model(
         provider = OpenAIProvider(openai_client=openai_client)
         if inferred_provider_name not in {None, 'azure'}:
             try:
-                provider_class = cast(type[Any], infer_provider_class(inferred_provider_name))
+                provider_class = cast('type[Any]', infer_provider_class(inferred_provider_name))
                 init_parameters = signature(provider_class.__init__).parameters
                 provider_kwargs = {'api_key': api_key} if 'api_key' in init_parameters else {}
                 if base_url:
