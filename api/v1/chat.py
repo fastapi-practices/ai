@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Request
+from fastapi import APIRouter, Body, Path, Request
 from fastapi.sse import EventSourceResponse
 
 from backend.common.pagination import CursorPageData, DependsCursorPagination
@@ -21,11 +21,21 @@ from backend.plugin.ai.service.chat_service import ai_chat_service
 router = APIRouter()
 
 
-@router.post('/completions', summary='文本生成（对话）', dependencies=[DependsJwtAuth])
+@router.post(
+    '/completions',
+    summary='文本生成（对话）',
+    description=(
+        '统一聊天入口，支持三种请求模式：'
+        '1. 普通发送：传 `user_prompt`，`conversation_id` 可不传'
+        '2. 编辑重发：传 `conversation_id`、`edit_message_id`、`user_prompt`'
+        '3. 重新生成：传 `conversation_id`、`regenerate_message_id`，无需再传 `user_prompt`'
+    ),
+    dependencies=[DependsJwtAuth],
+)
 async def create_ai_chat_completion(
     request: Request,
     db: CurrentSessionTransaction,
-    chat: AIChatParam,
+    chat: Annotated[AIChatParam, Body()],
 ) -> EventSourceResponse:
     return EventSourceResponse(
         ai_chat_service.stream_messages(db=db, chat=chat, user_id=request.user.id),

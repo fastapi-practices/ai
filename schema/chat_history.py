@@ -44,22 +44,6 @@ class DeleteAIChatMessageResult(SchemaBase):
     remaining_message_count: int = Field(description='剩余消息数量')
 
 
-class GetAIChatConversationItem(SchemaBase):
-    """聊天历史详情基础信息"""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int = Field(description='聊天历史 ID')
-    conversation_id: str = Field(description='会话 ID')
-    title: str = Field(description='会话标题')
-    provider_id: int = Field(description='供应商 ID')
-    model_id: str = Field(description='模型 ID')
-    is_pinned: bool = Field(description='是否置顶')
-    message_count: int = Field(description='消息数量')
-    created_time: datetime = Field(description='创建时间')
-    updated_time: datetime | None = Field(None, description='更新时间')
-
-
 class GetAIChatConversationListItem(SchemaBase):
     """聊天历史列表项"""
 
@@ -73,7 +57,17 @@ class GetAIChatConversationListItem(SchemaBase):
     updated_time: datetime | None = Field(None, description='更新时间')
 
 
-class GetAIChatConversationDetail(GetAIChatConversationItem):
+class GetAIChatConversationDetail(SchemaBase):
     """聊天历史详情"""
 
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(description='聊天历史 ID')
+    conversation_id: str = Field(description='会话 ID')
+    title: str = Field(description='会话标题')
+    provider_id: int = Field(description='供应商 ID')
+    model_id: str = Field(description='模型 ID')
+    is_pinned: bool = Field(description='是否置顶')
+    created_time: datetime = Field(description='创建时间')
+    updated_time: datetime | None = Field(None, description='更新时间')
     messages: list[GetAIChatMessageDetail] = Field(description='对话消息列表')

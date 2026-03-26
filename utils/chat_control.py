@@ -24,7 +24,7 @@ class StructuredOutputBase(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSettings | Any:
+def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSettings | Any:  # noqa: C901
     """
     构建模型配置
 
@@ -126,7 +126,7 @@ def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSetti
     return ModelSettings(**{k: v for k, v in common_settings.items() if v is not None})
 
 
-def build_schema_type(schema: dict[str, Any], *, model_name: str) -> Any:
+def build_schema_type(schema: dict[str, Any], *, model_name: str) -> Any:  # noqa: C901
     schema_type = schema.get('type')
     if isinstance(schema_type, list):
         non_null_types = [item for item in schema_type if item != 'null']

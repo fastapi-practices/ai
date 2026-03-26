@@ -19,7 +19,6 @@ from pydantic_ai import (
     PartDeltaEvent,
     PartEndEvent,
     PartStartEvent,
-    RunContext,
     TextPart,
     TextPartDelta,
     ThinkingPart,
@@ -45,10 +44,11 @@ from backend.plugin.ai.enums import (
     AIChatMessageRoleType,
     AIChatOutputModeType,
 )
-from backend.plugin.ai.schema.chat import AIChatParam
+from backend.plugin.ai.schema.chat import AIChatParam, CreateAIChatParam, EditAIChatParam, RegenerateAIChatParam
 from backend.plugin.ai.schema.chat_history import CreateAIChatHistoryParam, UpdateAIChatHistoryParam
 from backend.plugin.ai.service.chat_history_service import ai_chat_history_service
 from backend.plugin.ai.service.mcp_service import mcp_service
+from backend.plugin.ai.tools.chat_builtin_tools import register_chat_builtin_tools
 from backend.plugin.ai.utils.chat_control import build_model_settings, build_output_type
 from backend.plugin.ai.utils.message_parse import to_chat_messages
 from backend.plugin.ai.utils.model_control import get_provider_model
@@ -67,7 +67,7 @@ class ChatService:
     """聊天服务类"""
 
     @staticmethod
-    async def persist_chat_messages(
+    async def _persist_chat_messages(
         *,
         db: AsyncSession,
         conversation_id: str,
@@ -135,8 +135,8 @@ class ChatService:
         self,
         *,
         db: AsyncSession,
-        chat: AIChatParam,
         user_id: int,
+        chat: AIChatParam,
     ) -> AsyncGenerator[bytes, Any]:
         """
         流式消息
@@ -158,59 +158,53 @@ class ChatService:
         if not model.status:
             raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
 
+        is_edit_request = isinstance(chat, EditAIChatParam)
+        is_regenerate_request = isinstance(chat, RegenerateAIChatParam)
+        prompt = chat.user_prompt if isinstance(chat, (CreateAIChatParam, EditAIChatParam)) else None
+        request_attachments = chat.attachments if isinstance(chat, (CreateAIChatParam, EditAIChatParam)) else None
+
+        # 统一初始化本次流式会话上下文，兼容普通发送、编辑重发、重新生成
         conversation_id = chat.conversation_id or uuid4_str()
         chat_history = None
         existing_message_rows = []
         message_history = []
         next_message_index = 0
-        prompt = chat.user_prompt
-        should_emit_user_message = True
+        should_emit_user_message = not is_regenerate_request
         if chat.conversation_id:
-            chat_history = await ai_chat_history_service.get_conversation(
+            chat_history = await ai_chat_history_service.get(
                 db=db,
                 conversation_id=conversation_id,
                 user_id=user_id,
             )
             existing_message_rows = list(await ai_chat_message_dao.get_all(db, conversation_id))
-            if chat.edit_message_id is not None and chat.regenerate_message_id is not None:
-                raise errors.RequestError(msg='编辑重发与重新生成不能同时使用')
-            if chat.edit_message_id is not None:
-                if prompt is None:
-                    raise errors.RequestError(msg='编辑重发时用户提示词不能为空')
+            if is_edit_request:
                 chat_history, _, message_history = await ai_chat_history_service.get_editable_message(
                     db=db,
                     conversation_id=conversation_id,
                     user_id=user_id,
                     message_id=chat.edit_message_id,
                 )
-            elif chat.regenerate_message_id is not None:
+            elif is_regenerate_request:
                 chat_history, prompt, message_history = await ai_chat_history_service.get_regeneratable_message(
                     db=db,
                     conversation_id=conversation_id,
                     user_id=user_id,
                     message_id=chat.regenerate_message_id,
                 )
-                should_emit_user_message = False
             else:
-                if prompt is None:
-                    raise errors.RequestError(msg='用户提示词不能为空')
                 message_history = (
                     ModelMessagesTypeAdapter.validate_python([row.message for row in existing_message_rows])
                     if existing_message_rows
                     else []
                 )
             next_message_index = len(to_chat_messages(message_history))
-        else:
-            if chat.edit_message_id is not None:
-                raise errors.RequestError(msg='编辑重发必须指定会话 ID')
-            if chat.regenerate_message_id is not None:
-                raise errors.RequestError(msg='重新生成必须指定会话 ID')
-            if prompt is None:
-                raise errors.RequestError(msg='用户提示词不能为空')
 
-        assert prompt is not None
+        if prompt is None:
+            raise errors.ServerError(msg='聊天提示词解析失败')
+
+        # 将前端附件参数归一化为 pydantic-ai 可直接消费的多模态输入对象
         attachments: list[Any] = []
-        for attachment in chat.attachments or []:
+        for attachment in request_attachments or []:
             if attachment.source_type == AIChatAttachmentSourceType.url:
                 if not attachment.url:
                     raise errors.RequestError(msg='URL 类型附件必须提供 url')
@@ -248,6 +242,7 @@ class ChatService:
             model_settings=model_settings,
         )
 
+        # 动态构建本次对话 Agent
         agent = Agent(
             name='fba_chat',
             deps_type=ChatAgentDeps,
@@ -256,29 +251,11 @@ class ChatService:
             toolsets=toolsets,
         )
 
+        # 注册项目内置工具
         if chat.enable_builtin_tools:
+            register_chat_builtin_tools(agent)
 
-            @agent.tool
-            def get_current_time(_: RunContext[ChatAgentDeps]) -> str:
-                """获取当前时间"""
-                from backend.utils.timezone import timezone
-
-                return timezone.now().isoformat()
-
-            @agent.tool
-            async def list_my_quick_phrases(ctx: RunContext[ChatAgentDeps]) -> list[dict[str, Any]]:
-                """获取当前用户快捷短语列表"""
-                from backend.plugin.ai.service.quick_phrase_service import ai_quick_phrase_service
-
-                phrases = await ai_quick_phrase_service.get_all(db=ctx.deps.db, user_id=ctx.deps.user_id)
-                return [{'id': item.id, 'title': item.title, 'content': item.content} for item in phrases]
-
-            @agent.tool
-            async def list_provider_models(ctx: RunContext[ChatAgentDeps], provider_id: int) -> list[str]:
-                """获取指定供应商可用模型 ID"""
-                models = await ai_model_dao.get_all(ctx.deps.db, provider_id=provider_id)
-                return [item.model_id for item in models if item.status]
-
+        # 对新提问/编辑重发场景，先补发一条用户消息事件，便于前端即时渲染会话列表
         if should_emit_user_message:
             yield format_sse_event(
                 event='response.user',
@@ -296,6 +273,7 @@ class ChatService:
 
         for attempt in range(settings.AI_CHAT_MAX_RETRIES + 1):
             try:
+                # 文本流模式下逐段转发模型输出，并把 thinking/content/tool 事件映射为前端 SSE 协议
                 if chat.output_mode == AIChatOutputModeType.text:
                     part_message_indexes: dict[int, int] = {}
                     message_contents: dict[int, str] = {}
@@ -350,6 +328,7 @@ class ChatService:
                             if role is None or (event == 'delta' and not content):
                                 continue
 
+                            # 同一个 part 在 created/delta/done 生命周期内复用同一 message_index
                             message_index = part_message_indexes.get(stream_event.index)
                             if message_index is None:
                                 message_index = stream_message_index
@@ -461,9 +440,10 @@ class ChatService:
                     if result is None:
                         raise errors.ServerError(msg='聊天流结束时未获取最终结果')
 
+                    # 流式响应结束后，以模型最终完整消息序列为准落库，避免只保存增量片段。
                     persisted_messages = to_jsonable_python(list(result.all_messages()))
                     assert isinstance(persisted_messages, list)
-                    await self.persist_chat_messages(
+                    await self._persist_chat_messages(
                         db=db,
                         conversation_id=conversation_id,
                         prompt=prompt,
@@ -480,6 +460,7 @@ class ChatService:
                         data_str=json.dumps({'conversation_id': conversation_id}, ensure_ascii=False),
                     )
                 else:
+                    # 结构化输出模式不逐 token 推送，等待结果成型后一次性回传并持久化
                     async with agent.run_stream(
                         user_input, message_history=message_history, deps=ChatAgentDeps(db=db, user_id=user_id)
                     ) as result:
@@ -492,14 +473,13 @@ class ChatService:
                             model_name=model.model_id,
                             metadata={'structured_data': serialized_output},
                         )
-
                         persisted_messages = [*message_history]
                         if should_emit_user_message:
                             persisted_messages.append(ModelRequest(parts=[UserPromptPart(prompt)]))
                         persisted_messages.append(structured_response)
                         persisted_messages = to_jsonable_python(list(persisted_messages))
                         assert isinstance(persisted_messages, list)
-                        await self.persist_chat_messages(
+                        await self._persist_chat_messages(
                             db=db,
                             conversation_id=conversation_id,
                             prompt=prompt,
@@ -528,15 +508,31 @@ class ChatService:
                             event='response.completed',
                             data_str=json.dumps({'conversation_id': conversation_id}, ensure_ascii=False),
                         )
+
                 break
             except UnexpectedModelBehavior as e:
+                # 模型返回异常时先按配置重试；重试耗尽后降级为一条可展示、可追踪的错误消息。
                 if attempt < settings.AI_CHAT_MAX_RETRIES:
                     log.warning(
                         f'聊天模型响应异常，准备重试: conversation_id={conversation_id}, '
                         f'attempt={attempt + 1}, error={e}'
                     )
+                    yield format_sse_event(
+                        event='response.retrying',
+                        data_str=json.dumps(
+                            {
+                                'conversation_id': conversation_id,
+                                'attempt': attempt + 1,
+                                'max_retries': settings.AI_CHAT_MAX_RETRIES,
+                                'message': '模型响应异常，正在重试',
+                                'detail': str(e),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
                     continue
-                log.warning(f'聊天模型响应异常，已降级为错误提示: conversation_id={conversation_id}, error={e}')
+
+                log.error(f'聊天模型响应异常，已降级为错误提示: conversation_id={conversation_id}, error={e}')
                 failure_message = '服务暂时不可用，请稍后再试'
                 failure_response = ModelResponse(
                     parts=[TextPart(failure_message)],
@@ -550,10 +546,9 @@ class ChatService:
                 if should_emit_user_message:
                     persisted_messages.append(ModelRequest(parts=[UserPromptPart(prompt)]))
                 persisted_messages.append(failure_response)
-
                 persisted_messages = to_jsonable_python(list(persisted_messages))
                 assert isinstance(persisted_messages, list)
-                await self.persist_chat_messages(
+                await self._persist_chat_messages(
                     db=db,
                     conversation_id=conversation_id,
                     prompt=prompt,

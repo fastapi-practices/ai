@@ -1,6 +1,6 @@
-from typing import Any
+from typing import Any, TypeAlias
 
-from pydantic import Field, HttpUrl
+from pydantic import ConfigDict, Field, HttpUrl
 
 from backend.common.schema import SchemaBase
 from backend.plugin.ai.enums import (
@@ -11,8 +11,10 @@ from backend.plugin.ai.enums import (
 )
 
 
-class AIChatSchemaBase(SchemaBase):
-    """聊天基础模型"""
+class AIChatRequestBase(SchemaBase):
+    """聊天请求基础模型"""
+
+    model_config = ConfigDict(extra='forbid')
 
     max_tokens: int | None = Field(default=None, description='停止前最多可生成的 token 数')
     temperature: float | None = Field(default=1.0, description='模型生成文本的随机性')
@@ -28,13 +30,14 @@ class AIChatSchemaBase(SchemaBase):
     parallel_tool_calls: bool | None = Field(default=True, description='是否允许并行工具调用')
     include_thinking: bool = Field(default=False, description='是否返回模型思考链')
     reasoning_effort: str | None = Field(default=None, description='模型推理强度')
-    reasoning_summary: str | None = Field(default=None, description='思考链摘要级别')
     enable_builtin_tools: bool = Field(default=True, description='是否启用内置工具')
     mcp_ids: list[int] | None = Field(default=None, description='启用的 MCP ID 列表')
     output_mode: AIChatOutputModeType = Field(default=AIChatOutputModeType.text, description='输出模式')
     output_schema: dict[str, Any] | None = Field(default=None, description='结构化输出 JSON Schema')
     output_schema_name: str | None = Field(default=None, description='结构化输出名称')
     output_schema_description: str | None = Field(default=None, description='结构化输出说明')
+    provider_id: int = Field(description='供应商 ID')
+    model_id: str = Field(description='聊天模型')
 
 
 class AIChatAttachmentParam(SchemaBase):
@@ -45,19 +48,31 @@ class AIChatAttachmentParam(SchemaBase):
     url: HttpUrl | None = Field(default=None, description='附件 URL')
     content: str | None = Field(default=None, description='Base64 编码内容')
     media_type: str | None = Field(default=None, description='附件媒体类型')
-    filename: str | None = Field(default=None, description='附件名称')
 
 
-class AIChatParam(AIChatSchemaBase):
-    """AI 聊天参数"""
+class CreateAIChatParam(AIChatRequestBase):
+    """普通发送聊天参数"""
 
     conversation_id: str | None = Field(default=None, description='会话 ID，不传则创建新会话')
-    edit_message_id: int | None = Field(default=None, description='编辑并重发的用户消息 ID')
-    regenerate_message_id: int | None = Field(default=None, description='重新生成的 AI 消息 ID')
-    provider_id: int = Field(description='供应商 ID')
-    model_id: str = Field(description='聊天模型')
-    user_prompt: str | None = Field(default=None, description='用户提示词')
+    user_prompt: str = Field(description='用户提示词')
     attachments: list[AIChatAttachmentParam] | None = Field(default=None, description='聊天附件')
+
+
+class EditAIChatParam(CreateAIChatParam):
+    """编辑重发聊天参数"""
+
+    conversation_id: str = Field(description='会话 ID')
+    edit_message_id: int = Field(description='编辑并重发的用户消息 ID')
+
+
+class RegenerateAIChatParam(AIChatRequestBase):
+    """重新生成聊天参数"""
+
+    conversation_id: str = Field(description='会话 ID')
+    regenerate_message_id: int = Field(description='需重新生成的 AI 消息数据库 ID')
+
+
+AIChatParam: TypeAlias = CreateAIChatParam | EditAIChatParam | RegenerateAIChatParam
 
 
 class UpdateAIChatMessageParam(SchemaBase):

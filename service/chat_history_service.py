@@ -26,7 +26,7 @@ class AIChatHistoryService:
     """AI 聊天历史服务"""
 
     @staticmethod
-    async def get_conversation(*, db: AsyncSession, conversation_id: str, user_id: int) -> AIChatHistory:
+    async def get(*, db: AsyncSession, conversation_id: str, user_id: int) -> AIChatHistory:
         """
         获取聊天会话
 
@@ -70,7 +70,7 @@ class AIChatHistoryService:
         ]
         return page_data
 
-    async def _get_conversation_model_messages(
+    async def _get_history_and_messages(
         self, *, db: AsyncSession, conversation_id: str, user_id: int
     ) -> tuple[AIChatHistory, Sequence[AIChatMessage], list[ModelMessage] | Any]:
         """
@@ -81,26 +81,12 @@ class AIChatHistoryService:
         :param user_id: 用户 ID
         :return:
         """
-        chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        chat_history = await self.get(db=db, conversation_id=conversation_id, user_id=user_id)
         message_rows = await ai_chat_message_dao.get_all(db, chat_history.conversation_id)
         model_messages = (
             ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
         )
         return chat_history, message_rows, model_messages
-
-    @staticmethod
-    def _get_message_row_index(*, message_rows: Sequence[AIChatMessage], message_id: int) -> int:
-        """
-        通过消息 ID 获取消息记录索引
-
-        :param message_rows: 消息记录
-        :param message_id: 消息 ID
-        :return:
-        """
-        for index, row in enumerate(message_rows):
-            if row.id == message_id:
-                return index
-        raise errors.NotFoundError(msg='聊天消息不存在')
 
     async def get_detail(self, *, db: AsyncSession, conversation_id: str, user_id: int) -> GetAIChatConversationDetail:
         """
@@ -111,7 +97,7 @@ class AIChatHistoryService:
         :param user_id: 用户 ID
         :return:
         """
-        chat_history, message_rows, model_messages = await self._get_conversation_model_messages(
+        chat_history, message_rows, model_messages = await self._get_history_and_messages(
             db=db, conversation_id=conversation_id, user_id=user_id
         )
         message_ids = [row.id for row in message_rows]
@@ -127,7 +113,6 @@ class AIChatHistoryService:
             provider_id=chat_history.provider_id,
             model_id=chat_history.model_id,
             is_pinned=chat_history.pinned_time is not None,
-            message_count=len(messages),
             created_time=chat_history.created_time,
             updated_time=chat_history.updated_time,
             messages=messages,
@@ -150,21 +135,13 @@ class AIChatHistoryService:
         :param obj: 更新参数
         :return:
         """
-        chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        chat_history = await self.get(db=db, conversation_id=conversation_id, user_id=user_id)
         title = ' '.join(obj.title.split())
         if not title:
             raise errors.RequestError(msg='会话标题不能为空')
         if len(title) > 256:
             raise errors.RequestError(msg='会话标题过长')
-        payload = UpdateAIChatHistoryParam(
-            conversation_id=chat_history.conversation_id,
-            title=title,
-            provider_id=chat_history.provider_id,
-            model_id=chat_history.model_id,
-            user_id=chat_history.user_id,
-            pinned_time=chat_history.pinned_time,
-        )
-        return await ai_chat_history_dao.update(db, chat_history.id, payload)
+        return await ai_chat_history_dao.update_title(db, chat_history.id, title)
 
     async def update_pinned_status(
         self,
@@ -183,16 +160,10 @@ class AIChatHistoryService:
         :param obj: 更新参数
         :return:
         """
-        chat_history = await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
-        payload = UpdateAIChatHistoryParam(
-            conversation_id=chat_history.conversation_id,
-            title=chat_history.title,
-            provider_id=chat_history.provider_id,
-            model_id=chat_history.model_id,
-            user_id=chat_history.user_id,
-            pinned_time=timezone.now() if obj.is_pinned else None,
+        chat_history = await self.get(db=db, conversation_id=conversation_id, user_id=user_id)
+        return await ai_chat_history_dao.update_pinned_time(
+            db, chat_history.id, timezone.now() if obj.is_pinned else None
         )
-        return await ai_chat_history_dao.update(db, chat_history.id, payload)
 
     async def get_editable_message(
         self,
@@ -211,10 +182,12 @@ class AIChatHistoryService:
         :param message_id: 消息 ID
         :return:
         """
-        chat_history, message_rows, model_messages = await self._get_conversation_model_messages(
+        chat_history, message_rows, model_messages = await self._get_history_and_messages(
             db=db, conversation_id=conversation_id, user_id=user_id
         )
-        message_row_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
+        message_row_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if message_row_index is None:
+            raise errors.NotFoundError(msg='聊天消息不存在')
         target_message = model_messages[message_row_index]
         if not isinstance(target_message, ModelRequest):
             raise errors.RequestError(msg='仅支持编辑用户消息')
@@ -244,10 +217,12 @@ class AIChatHistoryService:
         :param obj: 更新参数
         :return:
         """
-        _, message_rows, model_messages = await self._get_conversation_model_messages(
+        _, message_rows, model_messages = await self._get_history_and_messages(
             db=db, conversation_id=conversation_id, user_id=user_id
         )
-        message_row_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
+        message_row_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if message_row_index is None:
+            raise errors.NotFoundError(msg='聊天消息不存在')
         target_message = model_messages[message_row_index]
         if not isinstance(target_message, ModelRequest):
             raise errors.RequestError(msg='仅支持编辑用户消息')
@@ -279,10 +254,12 @@ class AIChatHistoryService:
         :param message_id: 消息 ID
         :return:
         """
-        chat_history, message_rows, model_messages = await self._get_conversation_model_messages(
+        chat_history, message_rows, model_messages = await self._get_history_and_messages(
             db=db, conversation_id=conversation_id, user_id=user_id
         )
-        message_row_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
+        message_row_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if message_row_index is None:
+            raise errors.NotFoundError(msg='聊天消息不存在')
         target_message = model_messages[message_row_index]
         if not isinstance(target_message, ModelResponse):
             raise errors.RequestError(msg='仅支持重新生成 AI 消息')
@@ -317,10 +294,12 @@ class AIChatHistoryService:
         :param message_id: 消息 ID
         :return:
         """
-        chat_history, message_rows, model_messages = await self._get_conversation_model_messages(
+        chat_history, message_rows, model_messages = await self._get_history_and_messages(
             db=db, conversation_id=conversation_id, user_id=user_id
         )
-        target_message_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
+        target_message_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if target_message_index is None:
+            raise errors.NotFoundError(msg='聊天消息不存在')
         remaining_messages = list(model_messages)
         del remaining_messages[target_message_index]
         if not remaining_messages:
@@ -367,7 +346,7 @@ class AIChatHistoryService:
         :param user_id: 用户 ID
         :return:
         """
-        await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        await self.get(db=db, conversation_id=conversation_id, user_id=user_id)
         return await ai_chat_message_dao.delete(db, conversation_id)
 
     async def delete(self, *, db: AsyncSession, conversation_id: str, user_id: int) -> int:
@@ -379,7 +358,7 @@ class AIChatHistoryService:
         :param user_id: 用户 ID
         :return:
         """
-        await self.get_conversation(db=db, conversation_id=conversation_id, user_id=user_id)
+        await self.get(db=db, conversation_id=conversation_id, user_id=user_id)
         await ai_chat_message_dao.delete(db, conversation_id)
         return await ai_chat_history_dao.delete(db, conversation_id, user_id)
 

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import sqlalchemy as sa
 
 from sqlalchemy import desc, select
@@ -61,6 +63,28 @@ class CRUDAIChatHistory(CRUDPlus[AIChatHistory]):
         :return:
         """
         return await self.update_model(db, pk, obj)
+
+    async def update_title(self, db: AsyncSession, pk: int, title: str) -> int:
+        """
+        更新聊天话题标题
+
+        :param db: 数据库会话
+        :param pk: 历史 ID
+        :param title: 会话标题
+        :return:
+        """
+        return await self.update_model(db, pk, {'title': title})
+
+    async def update_pinned_time(self, db: AsyncSession, pk: int, pinned_time: datetime | None) -> int:
+        """
+        更新聊天话题置顶时间
+
+        :param db: 数据库会话
+        :param pk: 历史 ID
+        :param pinned_time: 置顶时间
+        :return:
+        """
+        return await self.update_model(db, pk, {'pinned_time': pinned_time})
 
     async def delete(self, db: AsyncSession, conversation_id: str, user_id: int) -> int:
         """
