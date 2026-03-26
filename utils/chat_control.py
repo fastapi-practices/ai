@@ -24,7 +24,129 @@ class StructuredOutputBase(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSettings | Any:  # noqa: C901
+def _build_openai_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> OpenAIChatModelSettings:
+    """
+    构建 OpenAI 模型配置
+
+    :param chat: 聊天参数
+    :param common_settings: 通用模型配置
+    :return:
+    """
+
+    openai_reasoning_effort: ReasoningEffort = None
+    match chat.reasoning_effort:
+        case AIChatReasoningEffortType.none:
+            openai_reasoning_effort = 'none'
+        case AIChatReasoningEffortType.minimal:
+            openai_reasoning_effort = 'minimal'
+        case AIChatReasoningEffortType.low:
+            openai_reasoning_effort = 'low'
+        case AIChatReasoningEffortType.medium:
+            openai_reasoning_effort = 'medium'
+        case AIChatReasoningEffortType.high:
+            openai_reasoning_effort = 'high'
+        case AIChatReasoningEffortType.xhigh:
+            openai_reasoning_effort = 'xhigh'
+
+    openai_settings = dict(common_settings)
+    if openai_reasoning_effort is not None:
+        openai_settings['openai_reasoning_effort'] = openai_reasoning_effort
+
+    return OpenAIChatModelSettings(**openai_settings)
+
+
+def _build_anthropic_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> AnthropicModelSettings:
+    """
+    构建 Anthropic 模型配置
+
+    :param chat: 聊天参数
+    :param common_settings: 通用模型配置
+    :return:
+    """
+
+    anthropic_thinking: BetaThinkingConfigEnabledParam | None = None
+    if chat.include_thinking:
+        anthropic_thinking: BetaThinkingConfigEnabledParam = {
+            'type': 'enabled',
+            'budget_tokens': 2048,
+        }
+
+    anthropic_settings = {
+        k: v
+        for k, v in common_settings.items()
+        if k not in {'seed', 'presence_penalty', 'frequency_penalty', 'logit_bias'}
+    }
+
+    if anthropic_thinking is not None:
+        anthropic_settings['anthropic_thinking'] = anthropic_thinking
+
+    return AnthropicModelSettings(**anthropic_settings)
+
+
+def _build_google_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> GoogleModelSettings:
+    """
+    构建 Google 模型配置
+
+    :param chat: 聊天参数
+    :param common_settings: 通用模型配置
+    :return:
+    """
+
+    google_thinking_config: ThinkingConfigDict | None = None
+    if chat.include_thinking:
+        google_thinking_config: ThinkingConfigDict = {'include_thoughts': True}
+
+    google_settings = {
+        k: v for k, v in common_settings.items() if k not in {'parallel_tool_calls', 'logit_bias', 'extra_body'}
+    }
+
+    if google_thinking_config is not None:
+        google_settings['google_thinking_config'] = google_thinking_config
+    return GoogleModelSettings(**google_settings)
+
+
+def _build_xai_model_settings(*, common_settings: dict[str, Any]) -> XaiModelSettings:
+    """
+    构建 xAI 模型配置
+
+    :param common_settings: 通用模型配置
+    :return:
+    """
+
+    return XaiModelSettings(**{
+        k: v for k, v in common_settings.items() if k not in {'seed', 'logit_bias', 'extra_body'}
+    })
+
+
+def _build_openrouter_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> OpenRouterModelSettings:
+    """
+    构建 OpenRouter 模型配置
+
+    :param chat: 聊天参数
+    :param common_settings: 通用模型配置
+    :return:
+    """
+
+    openrouter_reasoning: OpenRouterReasoning | None = None
+    if chat.include_thinking or chat.reasoning_effort:
+        openrouter_reasoning: OpenRouterReasoning = {
+            'enabled': chat.include_thinking,
+        }
+        if chat.reasoning_effort == AIChatReasoningEffortType.low:
+            openrouter_reasoning['effort'] = 'low'
+        elif chat.reasoning_effort == AIChatReasoningEffortType.medium:
+            openrouter_reasoning['effort'] = 'medium'
+        elif chat.reasoning_effort == AIChatReasoningEffortType.high:
+            openrouter_reasoning['effort'] = 'high'
+
+    openrouter_settings = dict(common_settings)
+    if openrouter_reasoning is not None:
+        openrouter_settings['openrouter_reasoning'] = openrouter_reasoning
+
+    return OpenRouterModelSettings(**openrouter_settings)
+
+
+def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSettings | Any:
     """
     构建模型配置
 
@@ -32,7 +154,9 @@ def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSetti
     :param provider_type: 供应商类型
     :return:
     """
+
     provider = AIProviderType(provider_type)
+    requested_fields = chat.model_fields_set
     common_settings = {
         'max_tokens': chat.max_tokens,
         'temperature': chat.temperature,
@@ -47,83 +171,20 @@ def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSetti
         'extra_headers': chat.extra_headers,
         'extra_body': chat.extra_body,
     }
+    common_settings = {k: v for k, v in common_settings.items() if k in requested_fields and v is not None}
 
     if provider == AIProviderType.openai:
-        openai_reasoning_effort: ReasoningEffort = None
-        match chat.reasoning_effort:
-            case AIChatReasoningEffortType.none:
-                openai_reasoning_effort = 'none'
-            case AIChatReasoningEffortType.minimal:
-                openai_reasoning_effort = 'minimal'
-            case AIChatReasoningEffortType.low:
-                openai_reasoning_effort = 'low'
-            case AIChatReasoningEffortType.medium:
-                openai_reasoning_effort = 'medium'
-            case AIChatReasoningEffortType.high:
-                openai_reasoning_effort = 'high'
-            case AIChatReasoningEffortType.xhigh:
-                openai_reasoning_effort = 'xhigh'
-        return OpenAIChatModelSettings(
-            **{k: v for k, v in common_settings.items() if v is not None},
-            openai_reasoning_effort=openai_reasoning_effort,
-        )
-
+        return _build_openai_model_settings(chat=chat, common_settings=common_settings)
     if provider == AIProviderType.anthropic:
-        anthropic_thinking: BetaThinkingConfigEnabledParam | None = None
-        if chat.include_thinking:
-            anthropic_thinking: BetaThinkingConfigEnabledParam = {
-                'type': 'enabled',
-                'budget_tokens': 2048,
-            }
-        return AnthropicModelSettings(
-            **{
-                k: v
-                for k, v in common_settings.items()
-                if k not in {'seed', 'presence_penalty', 'frequency_penalty', 'logit_bias'} and v is not None
-            },
-            anthropic_thinking=anthropic_thinking,
-        )
-
+        return _build_anthropic_model_settings(chat=chat, common_settings=common_settings)
     if provider == AIProviderType.google:
-        google_thinking_config: ThinkingConfigDict | None = None
-        if chat.include_thinking:
-            google_thinking_config: ThinkingConfigDict = {'include_thoughts': True}
-        return GoogleModelSettings(
-            **{
-                k: v
-                for k, v in common_settings.items()
-                if k not in {'parallel_tool_calls', 'logit_bias', 'extra_body'} and v is not None
-            },
-            google_thinking_config=google_thinking_config,
-        )
-
+        return _build_google_model_settings(chat=chat, common_settings=common_settings)
     if provider == AIProviderType.xai:
-        return XaiModelSettings(
-            **{
-                k: v
-                for k, v in common_settings.items()
-                if k not in {'seed', 'logit_bias', 'extra_body'} and v is not None
-            },
-        )
-
+        return _build_xai_model_settings(common_settings=common_settings)
     if provider == AIProviderType.openrouter:
-        openrouter_reasoning: OpenRouterReasoning | None = None
-        if chat.include_thinking or chat.reasoning_effort:
-            openrouter_reasoning: OpenRouterReasoning = {
-                'enabled': chat.include_thinking,
-            }
-            if chat.reasoning_effort == AIChatReasoningEffortType.low:
-                openrouter_reasoning['effort'] = 'low'
-            elif chat.reasoning_effort == AIChatReasoningEffortType.medium:
-                openrouter_reasoning['effort'] = 'medium'
-            elif chat.reasoning_effort == AIChatReasoningEffortType.high:
-                openrouter_reasoning['effort'] = 'high'
-        return OpenRouterModelSettings(
-            **{k: v for k, v in common_settings.items() if v is not None},
-            openrouter_reasoning=openrouter_reasoning,
-        )
+        return _build_openrouter_model_settings(chat=chat, common_settings=common_settings)
 
-    return ModelSettings(**{k: v for k, v in common_settings.items() if v is not None})
+    return ModelSettings(**common_settings)
 
 
 def build_schema_type(schema: dict[str, Any], *, model_name: str) -> Any:  # noqa: C901
