@@ -13,7 +13,6 @@ from pydantic_ai import (
     FinalResultEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
-    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     PartDeltaEvent,
@@ -33,7 +32,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.core.conf import settings
-from backend.database.db import uuid4_str
 from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
 from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
@@ -44,13 +42,12 @@ from backend.plugin.ai.enums import (
     AIChatMessageRoleType,
     AIChatOutputModeType,
 )
-from backend.plugin.ai.schema.chat import AIChatParam, CreateAIChatParam, EditAIChatParam, RegenerateAIChatParam
+from backend.plugin.ai.schema.chat import AIChatParam, CreateAIChatParam, EditAIChatParam
 from backend.plugin.ai.schema.chat_history import CreateAIChatHistoryParam, UpdateAIChatHistoryParam
 from backend.plugin.ai.service.chat_history_service import ai_chat_history_service
 from backend.plugin.ai.service.mcp_service import mcp_service
 from backend.plugin.ai.tools.chat_builtin_tools import register_chat_builtin_tools
 from backend.plugin.ai.utils.chat_control import build_model_settings, build_output_type
-from backend.plugin.ai.utils.message_parse import to_chat_messages
 from backend.plugin.ai.utils.model_control import get_provider_model
 from backend.utils.timezone import timezone
 
@@ -76,7 +73,7 @@ class ChatService:
         chat: AIChatParam,
         chat_history: Any,
         existing_message_rows: list[Any],
-        message_history: list[Any],
+        preserved_prefix_count: int,
         persisted_messages: list[dict[str, object]],
     ) -> None:
         """
@@ -89,7 +86,7 @@ class ChatService:
         :param chat: 聊天参数
         :param chat_history: 已存在的会话记录，不存在则创建新会话
         :param existing_message_rows: 数据库中的原始消息记录
-        :param message_history: 参与本次请求的历史模型消息
+        :param preserved_prefix_count: 需保留原始消息元信息的前缀长度
         :param persisted_messages: 最终需要落库的完整消息序列
         :return:
         """
@@ -119,10 +116,10 @@ class ChatService:
                     {
                         'conversation_id': conversation_id,
                         'provider_id': existing_message_rows[index].provider_id
-                        if index < len(message_history) and index < len(existing_message_rows)
+                        if index < preserved_prefix_count and index < len(existing_message_rows)
                         else chat.provider_id,
                         'model_id': existing_message_rows[index].model_id
-                        if index < len(message_history) and index < len(existing_message_rows)
+                        if index < preserved_prefix_count and index < len(existing_message_rows)
                         else chat.model_id,
                         'message_index': index,
                         'message': message,
@@ -158,49 +155,16 @@ class ChatService:
         if not model.status:
             raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
 
-        is_edit_request = isinstance(chat, EditAIChatParam)
-        is_regenerate_request = isinstance(chat, RegenerateAIChatParam)
-        prompt = chat.user_prompt if isinstance(chat, (CreateAIChatParam, EditAIChatParam)) else None
+        prepared = await ai_chat_history_service.prepare_chat_context(db=db, user_id=user_id, chat=chat)
+        conversation_id = prepared.conversation_id
+        chat_history = prepared.chat_history
+        existing_message_rows = prepared.existing_message_rows
+        message_history = prepared.message_history
+        prompt = prepared.prompt
+        next_message_index = prepared.next_message_index
+        should_emit_user_message = prepared.should_emit_user_message
+        preserved_prefix_count = prepared.preserved_prefix_count
         request_attachments = chat.attachments if isinstance(chat, (CreateAIChatParam, EditAIChatParam)) else None
-
-        # 统一初始化本次流式会话上下文，兼容普通发送、编辑重发、重新生成
-        conversation_id = chat.conversation_id or uuid4_str()
-        chat_history = None
-        existing_message_rows = []
-        message_history = []
-        next_message_index = 0
-        should_emit_user_message = not is_regenerate_request
-        if chat.conversation_id:
-            chat_history = await ai_chat_history_service.get(
-                db=db,
-                conversation_id=conversation_id,
-                user_id=user_id,
-            )
-            existing_message_rows = list(await ai_chat_message_dao.get_all(db, conversation_id))
-            if is_edit_request:
-                chat_history, _, message_history = await ai_chat_history_service.get_editable_message(
-                    db=db,
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                    message_id=chat.edit_message_id,
-                )
-            elif is_regenerate_request:
-                chat_history, prompt, message_history = await ai_chat_history_service.get_regeneratable_message(
-                    db=db,
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                    message_id=chat.regenerate_message_id,
-                )
-            else:
-                message_history = (
-                    ModelMessagesTypeAdapter.validate_python([row.message for row in existing_message_rows])
-                    if existing_message_rows
-                    else []
-                )
-            next_message_index = len(to_chat_messages(message_history))
-
-        if prompt is None:
-            raise errors.ServerError(msg='聊天提示词解析失败')
 
         # 将前端附件参数归一化为 pydantic-ai 可直接消费的多模态输入对象
         attachments: list[Any] = []
@@ -451,7 +415,7 @@ class ChatService:
                         chat=chat,
                         chat_history=chat_history,
                         existing_message_rows=existing_message_rows,
-                        message_history=message_history,
+                        preserved_prefix_count=preserved_prefix_count,
                         persisted_messages=persisted_messages,
                     )
 
@@ -487,7 +451,7 @@ class ChatService:
                             chat=chat,
                             chat_history=chat_history,
                             existing_message_rows=existing_message_rows,
-                            message_history=message_history,
+                            preserved_prefix_count=preserved_prefix_count,
                             persisted_messages=persisted_messages,
                         )
 
@@ -556,7 +520,7 @@ class ChatService:
                     chat=chat,
                     chat_history=chat_history,
                     existing_message_rows=existing_message_rows,
-                    message_history=message_history,
+                    preserved_prefix_count=preserved_prefix_count,
                     persisted_messages=persisted_messages,
                 )
 
