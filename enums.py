@@ -56,8 +56,15 @@ class AIChatAttachmentSourceType(StrEnum):
     base64 = 'base64'
 
 
-class AIChatMessageRoleType(StrEnum):
-    """聊天消息角色"""
+class AIChatGenerationType(StrEnum):
+    """聊天生成类型"""
+
+    text = 'text'
+    image = 'image'
+
+
+class AIMessageRoleType(StrEnum):
+    """消息角色"""
 
     user = 'user'
     thinking = 'thinking'

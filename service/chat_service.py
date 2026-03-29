@@ -1,56 +1,29 @@
-import base64
-import json
-
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi.sse import format_sse_event
-from pydantic_ai import (
-    Agent,
-    AgentRunResultEvent,
-    BinaryContent,
-    FinalResultEvent,
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
-    ModelRequest,
-    ModelResponse,
-    PartDeltaEvent,
-    PartEndEvent,
-    PartStartEvent,
-    TextPart,
-    TextPartDelta,
-    ThinkingPart,
-    ThinkingPartDelta,
-    UserPromptPart,
-)
-from pydantic_ai.exceptions import UnexpectedModelBehavior
-from pydantic_ai.messages import AudioUrl, DocumentUrl, ImageUrl, VideoUrl
+from fastapi.responses import Response
+from pydantic import ValidationError
+from pydantic_ai import Agent, BinaryImage, ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
+from pydantic_ai.builtin_tools import ImageGenerationTool
+from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.exception import errors
 from backend.common.log import log
-from backend.core.conf import settings
-from backend.plugin.ai.crud.crud_chat_history import ai_chat_history_dao
-from backend.plugin.ai.crud.crud_chat_message import ai_chat_message_dao
+from backend.database.db import uuid4_str
+from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
+from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
-from backend.plugin.ai.enums import (
-    AIChatAttachmentSourceType,
-    AIChatAttachmentType,
-    AIChatMessageRoleType,
-    AIChatOutputModeType,
-)
-from backend.plugin.ai.schema.chat import AIChatParam
-from backend.plugin.ai.schema.chat_history import CreateAIChatHistoryParam, UpdateAIChatHistoryParam
-from backend.plugin.ai.service.chat_history_service import ai_chat_history_service
+from backend.plugin.ai.enums import AIChatGenerationType, AIChatOutputModeType, AIProviderType
+from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
+from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
 from backend.plugin.ai.tools.chat_builtin_tools import register_chat_builtin_tools
-from backend.plugin.ai.utils.chat_control import build_model_settings, build_output_type
+from backend.plugin.ai.utils.chat_control import build_model_settings
 from backend.plugin.ai.utils.model_control import get_provider_model
 from backend.plugin.ai.utils.web_search import build_chat_search_tools
-from backend.utils.timezone import timezone
 
 
 @dataclass(slots=True)
@@ -62,144 +35,107 @@ class ChatAgentDeps:
 
 
 class ChatService:
-    """聊天服务类"""
+    """聊天服务"""
 
-    @staticmethod
-    async def _persist_chat_messages(
-        *,
-        db: AsyncSession,
-        conversation_id: str,
-        prompt: str,
-        user_id: int,
-        chat: AIChatParam,
-        chat_history: Any,
-        existing_message_rows: list[Any],
-        preserved_prefix_count: int,
-        persisted_messages: list[dict[str, object]],
-    ) -> None:
-        """
-        持久化当前会话消息
-
-        :param db: 数据库会话
-        :param conversation_id: 会话 ID
-        :param prompt: 当前用户提示词
-        :param user_id: 用户 ID
-        :param chat: 聊天参数
-        :param chat_history: 已存在的会话记录，不存在则创建新会话
-        :param existing_message_rows: 数据库中的原始消息记录
-        :param preserved_prefix_count: 需保留原始消息元信息的前缀长度
-        :param persisted_messages: 最终需要落库的完整消息序列
-        :return:
-        """
-        title = chat_history.title if chat_history else ' '.join(prompt.split())
-        if not title:
-            title = '新会话'
-        elif len(title) > 256:
-            title = title[:253] + '...'
-        payload = {
-            'conversation_id': conversation_id,
-            'title': title,
-            'provider_id': chat.provider_id,
-            'model_id': chat.model_id,
-            'user_id': chat_history.user_id if chat_history else user_id,
-            'pinned_time': chat_history.pinned_time if chat_history else None,
-        }
-        if chat_history:
-            await ai_chat_history_dao.update(db, chat_history.id, UpdateAIChatHistoryParam(**payload))
-        else:
-            await ai_chat_history_dao.create(db, CreateAIChatHistoryParam(**payload))
-
-        await ai_chat_message_dao.delete(db, conversation_id)
-        if persisted_messages:
-            await ai_chat_message_dao.bulk_create(
-                db,
-                [
-                    {
-                        'conversation_id': conversation_id,
-                        'provider_id': existing_message_rows[index].provider_id
-                        if index < preserved_prefix_count and index < len(existing_message_rows)
-                        else chat.provider_id,
-                        'model_id': existing_message_rows[index].model_id
-                        if index < preserved_prefix_count and index < len(existing_message_rows)
-                        else chat.model_id,
-                        'message_index': index,
-                        'message': message,
-                    }
-                    for index, message in enumerate(persisted_messages)
-                ],
-            )
-
-    async def stream_messages(  # noqa: C901
+    async def create_completion(  # noqa: C901
         self,
         *,
         db: AsyncSession,
         user_id: int,
-        chat: AIChatParam,
-    ) -> AsyncGenerator[bytes, Any]:
+        body: bytes,
+        accept: str | None,
+    ) -> Response:
         """
-        流式消息
+        创建流式对话
 
         :param db: 数据库会话
-        :param chat: 聊天参数
         :param user_id: 用户 ID
+        :param body: 请求体
+        :param accept: Accept 请求头
         :return:
         """
-        provider = await ai_provider_dao.get(db, chat.provider_id)
+        try:
+            run_input = AGUIAdapter.build_run_input(body)
+        except ValidationError as e:
+            return Response(content=e.json(), media_type='application/json', status_code=422)
+
+        updates: dict[str, Any] = {}
+        if not run_input.thread_id:
+            updates['thread_id'] = uuid4_str()
+        if not run_input.run_id:
+            updates['run_id'] = uuid4_str()
+        if updates:
+            run_input = run_input.model_copy(update=updates)
+
+        try:
+            forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
+        except ValidationError as e:
+            raise errors.RequestError(msg=f'聊天扩展参数非法: {e.errors()[0]["msg"]}') from e
+        if forwarded_props.mode != 'create':
+            raise errors.RequestError(msg='当前聊天接口仅支持 create 模式')
+        if forwarded_props.output_mode != AIChatOutputModeType.text:
+            raise errors.RequestError(msg='当前聊天接口仅支持文本输出模式')
+        if (
+            forwarded_props.output_schema
+            or forwarded_props.output_schema_name
+            or forwarded_props.output_schema_description
+        ):
+            raise errors.RequestError(msg='当前聊天接口暂不支持结构化输出')
+        if not run_input.messages:
+            raise errors.RequestError(msg='聊天消息不能为空')
+
+        try:
+            input_messages = AGUIAdapter.load_messages(run_input.messages)
+        except Exception as e:
+            log.warning(f'AG-UI messages parse failed: error={e}')
+            raise errors.RequestError(msg='AG-UI 消息格式非法') from e
+        if not input_messages:
+            raise errors.RequestError(msg='聊天消息不能为空')
+
+        last_message = input_messages[-1]
+        if not isinstance(last_message, ModelRequest) or not last_message.parts:
+            raise errors.RequestError(msg='最后一条消息必须是用户消息')
+        first_part = last_message.parts[0]
+        if not isinstance(first_part, UserPromptPart):
+            raise errors.RequestError(msg='最后一条消息必须是用户消息')
+        prompt_parts: list[str] = []
+        has_binary_input = False
+        if isinstance(first_part.content, str):
+            prompt_parts.append(first_part.content)
+        else:
+            for item in first_part.content:
+                if isinstance(item, str):
+                    prompt_parts.append(item)
+                else:
+                    has_binary_input = True
+        prompt = ' '.join(part.strip() for part in prompt_parts if part.strip()).strip()
+        if not prompt and not has_binary_input:
+            raise errors.RequestError(msg='最后一条用户消息不能为空')
+
+        provider = await ai_provider_dao.get(db, forwarded_props.provider_id)
         if not provider:
             raise errors.NotFoundError(msg='供应商不存在')
         if not provider.status:
             raise errors.RequestError(msg='此供应商暂不可用，请更换供应商或联系系统管理员')
+        if forwarded_props.generation_type == AIChatGenerationType.image and provider.type != AIProviderType.google:
+            raise errors.RequestError(msg='当前仅支持 Google 图片生成模型')
 
-        model = await ai_model_dao.get_by_model_and_provider(db, chat.model_id, chat.provider_id)
+        model = await ai_model_dao.get_by_model_and_provider(db, forwarded_props.model_id, forwarded_props.provider_id)
         if not model:
             raise errors.NotFoundError(msg='供应商模型不存在')
         if not model.status:
             raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
 
-        prepared = await ai_chat_history_service.prepare_chat_context(db=db, user_id=user_id, chat=chat)
-        conversation_id = prepared.conversation_id
-        chat_history = prepared.chat_history
-        existing_message_rows = prepared.existing_message_rows
-        message_history = prepared.message_history
-        prompt = prepared.prompt
-        next_message_index = prepared.next_message_index
-        should_emit_user_message = prepared.should_emit_user_message
-        preserved_prefix_count = prepared.preserved_prefix_count
-        request_attachments = chat.attachments if chat.mode in {'create', 'edit'} else None
-
-        # 将前端附件参数归一化为 pydantic-ai 可直接消费的多模态输入对象
-        attachments: list[Any] = []
-        for attachment in request_attachments or []:
-            if attachment.source_type == AIChatAttachmentSourceType.url:
-                if not attachment.url:
-                    raise errors.RequestError(msg='URL 类型附件必须提供 url')
-                url = str(attachment.url)
-                if attachment.type == AIChatAttachmentType.image:
-                    attachments.append(ImageUrl(url))
-                elif attachment.type == AIChatAttachmentType.audio:
-                    attachments.append(AudioUrl(url))
-                elif attachment.type == AIChatAttachmentType.video:
-                    attachments.append(VideoUrl(url))
-                else:
-                    attachments.append(DocumentUrl(url))
-                continue
-
-            if not attachment.content:
-                raise errors.RequestError(msg='Base64 类型附件必须提供 content')
-            if not attachment.media_type:
-                raise errors.RequestError(msg='Base64 类型附件必须提供 media_type')
-            attachments.append(
-                BinaryContent(
-                    data=base64.b64decode(attachment.content),
-                    media_type=attachment.media_type,
-                )
-            )
-
-        user_input = [prompt, *attachments] if attachments else prompt
-        model_settings = build_model_settings(chat=chat, provider_type=provider.type)
-        output_type = build_output_type(chat=chat)
-        toolsets = await mcp_service.get_toolsets(db=db, mcp_ids=chat.mcp_ids) if chat.mcp_ids else []
-        tools, builtin_tools = build_chat_search_tools(web_search=chat.web_search, provider_type=provider.type)
+        model_settings = build_model_settings(chat=forwarded_props, provider_type=provider.type)
+        toolsets = (
+            await mcp_service.get_toolsets(db=db, mcp_ids=forwarded_props.mcp_ids) if forwarded_props.mcp_ids else []
+        )
+        tools, builtin_tools = build_chat_search_tools(
+            web_search=forwarded_props.web_search,
+            provider_type=provider.type,
+        )
+        if forwarded_props.generation_type == AIChatGenerationType.image:
+            builtin_tools = [*builtin_tools, ImageGenerationTool()]
         model_instance = get_provider_model(
             provider_type=provider.type,
             model_name=model.model_id,
@@ -208,345 +144,435 @@ class ChatService:
             model_settings=model_settings,
         )
 
-        # 动态构建本次对话 Agent
         agent = Agent(
             name='fba_chat',
             deps_type=ChatAgentDeps,
             model=model_instance,
-            output_type=output_type,
+            output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
             tools=tools,
             toolsets=toolsets,
             builtin_tools=builtin_tools,
         )
-
-        # 注册项目内置工具
-        if chat.enable_builtin_tools:
+        if forwarded_props.enable_builtin_tools:
             register_chat_builtin_tools(agent)
 
-        # 对新提问/编辑重发场景，先补发一条用户消息事件，便于前端即时渲染会话列表
-        if should_emit_user_message:
-            yield format_sse_event(
-                event='response.user',
-                data_str=json.dumps(
-                    {
-                        'conversation_id': conversation_id,
-                        'message_index': next_message_index,
-                        'role': AIChatMessageRoleType.user,
-                        'content': prompt,
-                        'timestamp': timezone.now().isoformat(),
-                    },
-                    ensure_ascii=False,
+        conversation = await ai_conversation_dao.get_by_conversation_id(db, run_input.thread_id)
+        if conversation and conversation.user_id != user_id:
+            raise errors.NotFoundError(msg='对话不存在')
+        message_rows = list(await ai_message_dao.get_all(db, run_input.thread_id)) if conversation else []
+        model_messages = (
+            ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
+        )
+        context_start_index = 0
+        if conversation and conversation.context_start_message_id is not None:
+            boundary_index = next(
+                (index for index, row in enumerate(message_rows) if row.id == conversation.context_start_message_id),
+                None,
+            )
+            if boundary_index is not None:
+                context_start_index = boundary_index + 1
+
+        message_history = [*model_messages[context_start_index:], last_message] if conversation else input_messages
+        preserved_history_count = len(message_rows)
+        context_message_count = len(model_messages[context_start_index:]) if conversation else 0
+
+        async def on_complete(result: Any) -> None:
+            persisted_messages = to_jsonable_python(list(result.all_messages()))
+            assert isinstance(persisted_messages, list)
+
+            title = conversation.title if conversation else prompt
+            if not title:
+                title = '新对话'
+            elif len(title) > 256:
+                title = title[:253] + '...'
+
+            payload = {
+                'conversation_id': run_input.thread_id,
+                'title': title,
+                'provider_id': forwarded_props.provider_id,
+                'model_id': forwarded_props.model_id,
+                'user_id': conversation.user_id if conversation else user_id,
+                'pinned_time': conversation.pinned_time if conversation else None,
+                'context_start_message_id': conversation.context_start_message_id if conversation else None,
+                'context_cleared_time': conversation.context_cleared_time if conversation else None,
+            }
+            if conversation:
+                await ai_conversation_dao.update(db, conversation.id, UpdateAIConversationParam(**payload))
+            else:
+                await ai_conversation_dao.create(db, CreateAIConversationParam(**payload))
+
+            if conversation and preserved_history_count > 0:
+                await ai_message_dao.delete_after_message_index(db, run_input.thread_id, preserved_history_count)
+                tail_messages = persisted_messages[context_message_count:]
+            else:
+                tail_messages = persisted_messages
+            if tail_messages:
+                await ai_message_dao.bulk_create(
+                    db,
+                    [
+                        {
+                            'conversation_id': run_input.thread_id,
+                            'provider_id': forwarded_props.provider_id,
+                            'model_id': forwarded_props.model_id,
+                            'message_index': preserved_history_count + index,
+                            'message': message,
+                        }
+                        for index, message in enumerate(tail_messages)
+                    ],
+                )
+
+        adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
+        event_stream = adapter.run_stream(
+            deps=ChatAgentDeps(db=db, user_id=user_id),
+            message_history=message_history,
+            on_complete=on_complete,
+        )
+        return adapter.streaming_response(event_stream)
+
+    async def regenerate_from_user_message(  # noqa: C901
+        self,
+        *,
+        db: AsyncSession,
+        user_id: int,
+        conversation_id: str,
+        message_id: int,
+        body: bytes,
+        accept: str | None,
+    ) -> Response:
+        """
+        根据用户消息重生成 AI 回复
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param conversation_id: 对话 ID
+        :param message_id: 消息 ID
+        :param body: 请求体
+        :param accept: Accept 请求头
+        :return:
+        """
+        try:
+            run_input = AGUIAdapter.build_run_input(body)
+        except ValidationError as e:
+            return Response(content=e.json(), media_type='application/json', status_code=422)
+
+        updates: dict[str, Any] = {}
+        if not run_input.thread_id:
+            updates['thread_id'] = conversation_id
+        if not run_input.run_id:
+            updates['run_id'] = uuid4_str()
+        if updates:
+            run_input = run_input.model_copy(update=updates)
+        if run_input.thread_id != conversation_id:
+            raise errors.RequestError(msg='请求体中的对话 ID 与路径不一致')
+
+        try:
+            forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
+        except ValidationError as e:
+            raise errors.RequestError(msg=f'聊天扩展参数非法: {e.errors()[0]["msg"]}') from e
+        if forwarded_props.mode != 'create':
+            raise errors.RequestError(msg='当前聊天接口仅支持 create 模式')
+        if forwarded_props.output_mode != AIChatOutputModeType.text:
+            raise errors.RequestError(msg='当前聊天接口仅支持文本输出模式')
+        if (
+            forwarded_props.output_schema
+            or forwarded_props.output_schema_name
+            or forwarded_props.output_schema_description
+        ):
+            raise errors.RequestError(msg='当前聊天接口暂不支持结构化输出')
+
+        conversation = await ai_conversation_dao.get_by_conversation_id(db, conversation_id)
+        if not conversation or conversation.user_id != user_id:
+            raise errors.NotFoundError(msg='对话不存在')
+
+        message_rows = list(await ai_message_dao.get_all(db, conversation_id))
+        if not message_rows:
+            raise errors.RequestError(msg='对话消息不存在')
+        target_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if target_index is None:
+            raise errors.NotFoundError(msg='消息不存在')
+
+        model_messages = ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows])
+        target_message = model_messages[target_index]
+        if not isinstance(target_message, ModelRequest):
+            raise errors.RequestError(msg='仅支持根据用户消息重生成')
+        if not target_message.parts or not isinstance(target_message.parts[0], UserPromptPart):
+            raise errors.RequestError(msg='仅支持根据用户消息重生成')
+
+        context_start_index = 0
+        if conversation.context_start_message_id is not None:
+            boundary_index = next(
+                (index for index, row in enumerate(message_rows) if row.id == conversation.context_start_message_id),
+                None,
+            )
+            if boundary_index is not None:
+                context_start_index = boundary_index + 1
+        if target_index < context_start_index:
+            raise errors.RequestError(msg='指定消息已不在当前上下文中')
+
+        provider = await ai_provider_dao.get(db, forwarded_props.provider_id)
+        if not provider:
+            raise errors.NotFoundError(msg='供应商不存在')
+        if not provider.status:
+            raise errors.RequestError(msg='此供应商暂不可用，请更换供应商或联系系统管理员')
+        if forwarded_props.generation_type == AIChatGenerationType.image and provider.type != AIProviderType.google:
+            raise errors.RequestError(msg='当前仅支持 Google 图片生成模型')
+
+        model = await ai_model_dao.get_by_model_and_provider(db, forwarded_props.model_id, forwarded_props.provider_id)
+        if not model:
+            raise errors.NotFoundError(msg='供应商模型不存在')
+        if not model.status:
+            raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
+
+        model_settings = build_model_settings(chat=forwarded_props, provider_type=provider.type)
+        toolsets = (
+            await mcp_service.get_toolsets(db=db, mcp_ids=forwarded_props.mcp_ids) if forwarded_props.mcp_ids else []
+        )
+        tools, builtin_tools = build_chat_search_tools(
+            web_search=forwarded_props.web_search,
+            provider_type=provider.type,
+        )
+        if forwarded_props.generation_type == AIChatGenerationType.image:
+            builtin_tools = [*builtin_tools, ImageGenerationTool()]
+        model_instance = get_provider_model(
+            provider_type=provider.type,
+            model_name=model.model_id,
+            api_key=provider.api_key,
+            base_url=provider.api_host,
+            model_settings=model_settings,
+        )
+
+        agent = Agent(
+            name='fba_chat',
+            deps_type=ChatAgentDeps,
+            model=model_instance,
+            output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
+            tools=tools,
+            toolsets=toolsets,
+            builtin_tools=builtin_tools,
+        )
+        if forwarded_props.enable_builtin_tools:
+            register_chat_builtin_tools(agent)
+
+        message_history = model_messages[context_start_index : target_index + 1]
+        preserved_history_count = target_index + 1
+        preserved_context_count = len(message_history)
+
+        async def on_complete(result: Any) -> None:
+            persisted_messages = to_jsonable_python(list(result.all_messages()))
+            assert isinstance(persisted_messages, list)
+
+            await ai_conversation_dao.update(
+                db,
+                conversation.id,
+                UpdateAIConversationParam(
+                    conversation_id=conversation.conversation_id,
+                    title=conversation.title,
+                    provider_id=forwarded_props.provider_id,
+                    model_id=forwarded_props.model_id,
+                    user_id=conversation.user_id,
+                    pinned_time=conversation.pinned_time,
+                    context_start_message_id=conversation.context_start_message_id,
+                    context_cleared_time=conversation.context_cleared_time,
                 ),
             )
-
-        for attempt in range(settings.AI_CHAT_MAX_RETRIES + 1):
-            try:
-                # 文本流模式下逐段转发模型输出，并把 thinking/content/tool 事件映射为前端 SSE 协议
-                if chat.output_mode == AIChatOutputModeType.text:
-                    part_message_indexes: dict[int, int] = {}
-                    message_contents: dict[int, str] = {}
-                    stream_message_index = next_message_index + (1 if should_emit_user_message else 0)
-                    result = None
-
-                    async for stream_event in agent.run_stream_events(
-                        user_input,
-                        message_history=message_history,
-                        deps=ChatAgentDeps(db=db, user_id=user_id),
-                    ):
-                        if isinstance(stream_event, AgentRunResultEvent):
-                            result = stream_event.result
-                            continue
-
-                        if isinstance(stream_event, (PartStartEvent, PartDeltaEvent, PartEndEvent)):
-                            role: AIChatMessageRoleType | None = None
-                            content = ''
-                            event = ''
-
-                            if isinstance(stream_event, PartStartEvent):
-                                if isinstance(stream_event.part, ThinkingPart):
-                                    if not chat.include_thinking:
-                                        continue
-                                    role = AIChatMessageRoleType.thinking
-                                    content = stream_event.part.content
-                                elif isinstance(stream_event.part, TextPart):
-                                    role = AIChatMessageRoleType.model
-                                    content = stream_event.part.content
-                                event = 'created'
-                            elif isinstance(stream_event, PartDeltaEvent):
-                                if isinstance(stream_event.delta, ThinkingPartDelta):
-                                    if not chat.include_thinking:
-                                        continue
-                                    role = AIChatMessageRoleType.thinking
-                                    content = stream_event.delta.content_delta
-                                elif isinstance(stream_event.delta, TextPartDelta):
-                                    role = AIChatMessageRoleType.model
-                                    content = stream_event.delta.content_delta
-                                event = 'delta'
-                            else:
-                                if isinstance(stream_event.part, ThinkingPart):
-                                    if not chat.include_thinking:
-                                        continue
-                                    role = AIChatMessageRoleType.thinking
-                                    content = stream_event.part.content
-                                elif isinstance(stream_event.part, TextPart):
-                                    role = AIChatMessageRoleType.model
-                                    content = stream_event.part.content
-                                event = 'done'
-
-                            if role is None or (event == 'delta' and not content):
-                                continue
-
-                            # 同一个 part 在 created/delta/done 生命周期内复用同一 message_index
-                            message_index = part_message_indexes.get(stream_event.index)
-                            if message_index is None:
-                                message_index = stream_message_index
-                                stream_message_index += 1
-                                part_message_indexes[stream_event.index] = message_index
-
-                            event_prefix = (
-                                'response.reasoning'
-                                if role == AIChatMessageRoleType.thinking
-                                else 'response.output_text'
-                            )
-                            if event == 'created':
-                                message_contents.setdefault(message_index, '')
-                                yield format_sse_event(
-                                    event=f'{event_prefix}.created',
-                                    data_str=json.dumps(
-                                        {
-                                            'conversation_id': conversation_id,
-                                            'message_index': message_index,
-                                            'role': role,
-                                            'timestamp': timezone.now().isoformat(),
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                                if content:
-                                    message_contents[message_index] = content
-                                    yield format_sse_event(
-                                        event=f'{event_prefix}.delta',
-                                        data_str=json.dumps(
-                                            {
-                                                'conversation_id': conversation_id,
-                                                'message_index': message_index,
-                                                'delta': content,
-                                            },
-                                            ensure_ascii=False,
-                                        ),
-                                    )
-                            elif event == 'delta':
-                                message_contents[message_index] = message_contents.get(message_index, '') + content
-                                yield format_sse_event(
-                                    event=f'{event_prefix}.delta',
-                                    data_str=json.dumps(
-                                        {
-                                            'conversation_id': conversation_id,
-                                            'message_index': message_index,
-                                            'delta': content,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            else:
-                                message_contents[message_index] = content
-                                yield format_sse_event(
-                                    event=f'{event_prefix}.done',
-                                    data_str=json.dumps(
-                                        {
-                                            'conversation_id': conversation_id,
-                                            'message_index': message_index,
-                                            'content': content,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                )
-                            continue
-
-                        if isinstance(stream_event, FunctionToolCallEvent):
-                            yield format_sse_event(
-                                event='response.tool_call',
-                                data_str=json.dumps(
-                                    {
-                                        'conversation_id': conversation_id,
-                                        'tool_call_id': stream_event.part.tool_call_id,
-                                        'tool_name': stream_event.part.tool_name,
-                                        'args': stream_event.part.args,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            )
-                            continue
-
-                        if isinstance(stream_event, FunctionToolResultEvent):
-                            yield format_sse_event(
-                                event='response.tool_result',
-                                data_str=json.dumps(
-                                    {
-                                        'conversation_id': conversation_id,
-                                        'tool_call_id': stream_event.tool_call_id,
-                                        'content': stream_event.result.content,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            )
-                            continue
-
-                        if isinstance(stream_event, FinalResultEvent):
-                            yield format_sse_event(
-                                event='response.final_result',
-                                data_str=json.dumps(
-                                    {
-                                        'conversation_id': conversation_id,
-                                        'tool_name': stream_event.tool_name,
-                                        'tool_call_id': stream_event.tool_call_id,
-                                    },
-                                    ensure_ascii=False,
-                                ),
-                            )
-
-                    if result is None:
-                        raise errors.ServerError(msg='聊天流结束时未获取最终结果')
-
-                    # 流式响应结束后，以模型最终完整消息序列为准落库，避免只保存增量片段。
-                    persisted_messages = to_jsonable_python(list(result.all_messages()))
-                    assert isinstance(persisted_messages, list)
-                    await self._persist_chat_messages(
-                        db=db,
-                        conversation_id=conversation_id,
-                        prompt=prompt,
-                        user_id=user_id,
-                        chat=chat,
-                        chat_history=chat_history,
-                        existing_message_rows=existing_message_rows,
-                        preserved_prefix_count=preserved_prefix_count,
-                        persisted_messages=persisted_messages,
-                    )
-
-                    yield format_sse_event(
-                        event='response.completed',
-                        data_str=json.dumps({'conversation_id': conversation_id}, ensure_ascii=False),
-                    )
-                else:
-                    # 结构化输出模式不逐 token 推送，等待结果成型后一次性回传并持久化
-                    async with agent.run_stream(
-                        user_input, message_history=message_history, deps=ChatAgentDeps(db=db, user_id=user_id)
-                    ) as result:
-                        structured_output = await result.get_output()
-                        serialized_output = to_jsonable_python(structured_output)
-                        if not isinstance(serialized_output, (dict, list)):
-                            serialized_output = {'value': serialized_output}
-                        structured_response = ModelResponse(
-                            parts=[TextPart(json.dumps(serialized_output, ensure_ascii=False))],
-                            model_name=model.model_id,
-                            metadata={'structured_data': serialized_output},
-                        )
-                        persisted_messages = [*message_history]
-                        if should_emit_user_message:
-                            persisted_messages.append(ModelRequest(parts=[UserPromptPart(prompt)]))
-                        persisted_messages.append(structured_response)
-                        persisted_messages = to_jsonable_python(list(persisted_messages))
-                        assert isinstance(persisted_messages, list)
-                        await self._persist_chat_messages(
-                            db=db,
-                            conversation_id=conversation_id,
-                            prompt=prompt,
-                            user_id=user_id,
-                            chat=chat,
-                            chat_history=chat_history,
-                            existing_message_rows=existing_message_rows,
-                            preserved_prefix_count=preserved_prefix_count,
-                            persisted_messages=persisted_messages,
-                        )
-
-                        yield format_sse_event(
-                            event='response.structured.done',
-                            data_str=json.dumps(
-                                {
-                                    'conversation_id': conversation_id,
-                                    'message_index': next_message_index + (1 if should_emit_user_message else 0),
-                                    'content': structured_response.parts[0].content,
-                                    'structured_data': structured_response.metadata['structured_data'],
-                                },
-                                ensure_ascii=False,
-                            ),
-                        )
-
-                        yield format_sse_event(
-                            event='response.completed',
-                            data_str=json.dumps({'conversation_id': conversation_id}, ensure_ascii=False),
-                        )
-
-                break
-            except UnexpectedModelBehavior as e:
-                # 模型返回异常时先按配置重试；重试耗尽后降级为一条可展示、可追踪的错误消息。
-                if attempt < settings.AI_CHAT_MAX_RETRIES:
-                    log.warning(
-                        f'聊天模型响应异常，准备重试: conversation_id={conversation_id}, '
-                        f'attempt={attempt + 1}, error={e}'
-                    )
-                    yield format_sse_event(
-                        event='response.retrying',
-                        data_str=json.dumps(
-                            {
-                                'conversation_id': conversation_id,
-                                'attempt': attempt + 1,
-                                'max_retries': settings.AI_CHAT_MAX_RETRIES,
-                                'message': '模型响应异常，正在重试',
-                                'detail': str(e),
-                            },
-                            ensure_ascii=False,
-                        ),
-                    )
-                    continue
-
-                log.error(f'聊天模型响应异常，已降级为错误提示: conversation_id={conversation_id}, error={e}')
-                failure_message = '服务暂时不可用，请稍后再试'
-                failure_response = ModelResponse(
-                    parts=[TextPart(failure_message)],
-                    model_name=model.model_id,
-                    metadata={
-                        'is_error': True,
-                        'error_message': str(e),
-                    },
-                )
-                persisted_messages = [*message_history]
-                if should_emit_user_message:
-                    persisted_messages.append(ModelRequest(parts=[UserPromptPart(prompt)]))
-                persisted_messages.append(failure_response)
-                persisted_messages = to_jsonable_python(list(persisted_messages))
-                assert isinstance(persisted_messages, list)
-                await self._persist_chat_messages(
-                    db=db,
-                    conversation_id=conversation_id,
-                    prompt=prompt,
-                    user_id=user_id,
-                    chat=chat,
-                    chat_history=chat_history,
-                    existing_message_rows=existing_message_rows,
-                    preserved_prefix_count=preserved_prefix_count,
-                    persisted_messages=persisted_messages,
-                )
-
-                yield format_sse_event(
-                    event='response.error',
-                    data_str=json.dumps(
+            await ai_message_dao.delete_after_message_index(db, conversation_id, preserved_history_count)
+            tail_messages = persisted_messages[preserved_context_count:]
+            if tail_messages:
+                await ai_message_dao.bulk_create(
+                    db,
+                    [
                         {
                             'conversation_id': conversation_id,
-                            'message_index': next_message_index + (1 if should_emit_user_message else 0),
-                            'message': failure_message,
-                            'detail': str(e),
-                        },
-                        ensure_ascii=False,
-                    ),
+                            'provider_id': forwarded_props.provider_id,
+                            'model_id': forwarded_props.model_id,
+                            'message_index': preserved_history_count + index,
+                            'message': message,
+                        }
+                        for index, message in enumerate(tail_messages)
+                    ],
                 )
 
-                yield format_sse_event(
-                    event='response.completed',
-                    data_str=json.dumps({'conversation_id': conversation_id}, ensure_ascii=False),
-                )
+        adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
+        event_stream = adapter.run_stream(
+            deps=ChatAgentDeps(db=db, user_id=user_id),
+            message_history=message_history,
+            on_complete=on_complete,
+        )
+        return adapter.streaming_response(event_stream)
 
+    async def regenerate_from_response_message(  # noqa: C901
+        self,
+        *,
+        db: AsyncSession,
+        user_id: int,
+        conversation_id: str,
+        message_id: int,
+        body: bytes,
+        accept: str | None,
+    ) -> Response:
+        """
+        根据 AI 回复重生成
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param conversation_id: 对话 ID
+        :param message_id: 消息 ID
+        :param body: 请求体
+        :param accept: Accept 请求头
+        :return:
+        """
+        try:
+            run_input = AGUIAdapter.build_run_input(body)
+        except ValidationError as e:
+            return Response(content=e.json(), media_type='application/json', status_code=422)
+
+        updates: dict[str, Any] = {}
+        if not run_input.thread_id:
+            updates['thread_id'] = conversation_id
+        if not run_input.run_id:
+            updates['run_id'] = uuid4_str()
+        if updates:
+            run_input = run_input.model_copy(update=updates)
+
+        try:
+            forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
+        except ValidationError as e:
+            raise errors.RequestError(msg=f'聊天扩展参数非法: {e.errors()[0]["msg"]}') from e
+        if forwarded_props.mode != 'create':
+            raise errors.RequestError(msg='当前聊天接口仅支持 create 模式')
+        if forwarded_props.output_mode != AIChatOutputModeType.text:
+            raise errors.RequestError(msg='当前聊天接口仅支持文本输出模式')
+        if (
+            forwarded_props.output_schema
+            or forwarded_props.output_schema_name
+            or forwarded_props.output_schema_description
+        ):
+            raise errors.RequestError(msg='当前聊天接口暂不支持结构化输出')
+
+        conversation = await ai_conversation_dao.get_by_conversation_id(db, conversation_id)
+        if not conversation or conversation.user_id != user_id:
+            raise errors.NotFoundError(msg='对话不存在')
+
+        message_rows = list(await ai_message_dao.get_all(db, conversation_id))
+        if not message_rows:
+            raise errors.RequestError(msg='对话消息不存在')
+        target_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        if target_index is None:
+            raise errors.NotFoundError(msg='消息不存在')
+
+        model_messages = ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows])
+        if isinstance(model_messages[target_index], ModelRequest):
+            raise errors.RequestError(msg='仅支持根据 AI 回复重生成')
+
+        context_start_index = 0
+        if conversation.context_start_message_id is not None:
+            boundary_index = next(
+                (index for index, row in enumerate(message_rows) if row.id == conversation.context_start_message_id),
+                None,
+            )
+            if boundary_index is not None:
+                context_start_index = boundary_index + 1
+        if target_index < context_start_index:
+            raise errors.RequestError(msg='指定消息已不在当前上下文中')
+
+        user_message_index = None
+        for index in range(target_index - 1, context_start_index - 1, -1):
+            if isinstance(model_messages[index], ModelRequest):
+                user_message_index = index
                 break
+        if user_message_index is None:
+            raise errors.RequestError(msg='未找到对应的用户消息')
+
+        provider = await ai_provider_dao.get(db, forwarded_props.provider_id)
+        if not provider:
+            raise errors.NotFoundError(msg='供应商不存在')
+        if not provider.status:
+            raise errors.RequestError(msg='此供应商暂不可用，请更换供应商或联系系统管理员')
+        if forwarded_props.generation_type == AIChatGenerationType.image and provider.type != AIProviderType.google:
+            raise errors.RequestError(msg='当前仅支持 Google 图片生成模型')
+
+        model = await ai_model_dao.get_by_model_and_provider(db, forwarded_props.model_id, forwarded_props.provider_id)
+        if not model:
+            raise errors.NotFoundError(msg='供应商模型不存在')
+        if not model.status:
+            raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
+
+        model_settings = build_model_settings(chat=forwarded_props, provider_type=provider.type)
+        toolsets = (
+            await mcp_service.get_toolsets(db=db, mcp_ids=forwarded_props.mcp_ids) if forwarded_props.mcp_ids else []
+        )
+        tools, builtin_tools = build_chat_search_tools(
+            web_search=forwarded_props.web_search,
+            provider_type=provider.type,
+        )
+        if forwarded_props.generation_type == AIChatGenerationType.image:
+            builtin_tools = [*builtin_tools, ImageGenerationTool()]
+        model_instance = get_provider_model(
+            provider_type=provider.type,
+            model_name=model.model_id,
+            api_key=provider.api_key,
+            base_url=provider.api_host,
+            model_settings=model_settings,
+        )
+
+        agent = Agent(
+            name='fba_chat',
+            deps_type=ChatAgentDeps,
+            model=model_instance,
+            output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
+            tools=tools,
+            toolsets=toolsets,
+            builtin_tools=builtin_tools,
+        )
+        if forwarded_props.enable_builtin_tools:
+            register_chat_builtin_tools(agent)
+
+        message_history = model_messages[context_start_index : user_message_index + 1]
+        preserved_history_count = user_message_index + 1
+        preserved_context_count = len(message_history)
+
+        async def on_complete(result: Any) -> None:
+            persisted_messages = to_jsonable_python(list(result.all_messages()))
+            assert isinstance(persisted_messages, list)
+
+            await ai_conversation_dao.update(
+                db,
+                conversation.id,
+                UpdateAIConversationParam(
+                    conversation_id=conversation.conversation_id,
+                    title=conversation.title,
+                    provider_id=forwarded_props.provider_id,
+                    model_id=forwarded_props.model_id,
+                    user_id=conversation.user_id,
+                    pinned_time=conversation.pinned_time,
+                    context_start_message_id=conversation.context_start_message_id,
+                    context_cleared_time=conversation.context_cleared_time,
+                ),
+            )
+            await ai_message_dao.delete_after_message_index(db, conversation_id, preserved_history_count)
+            tail_messages = persisted_messages[preserved_context_count:]
+            if tail_messages:
+                await ai_message_dao.bulk_create(
+                    db,
+                    [
+                        {
+                            'conversation_id': conversation_id,
+                            'provider_id': forwarded_props.provider_id,
+                            'model_id': forwarded_props.model_id,
+                            'message_index': preserved_history_count + index,
+                            'message': message,
+                        }
+                        for index, message in enumerate(tail_messages)
+                    ],
+                )
+
+        adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
+        event_stream = adapter.run_stream(
+            deps=ChatAgentDeps(db=db, user_id=user_id),
+            message_history=message_history,
+            on_complete=on_complete,
+        )
+        return adapter.streaming_response(event_stream)
 
 
 ai_chat_service: ChatService = ChatService()

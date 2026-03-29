@@ -1,16 +1,14 @@
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, create_model
-from pydantic_ai import ModelSettings, NativeOutput, PromptedOutput, ToolOutput
+from pydantic_ai import ModelSettings
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.google import GoogleModelSettings
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.models.openrouter import OpenRouterModelSettings, OpenRouterReasoning
 from pydantic_ai.models.xai import XaiModelSettings
 
-from backend.common.exception import errors
-from backend.plugin.ai.enums import AIChatOutputModeType, AIChatReasoningEffortType, AIProviderType
-from backend.plugin.ai.schema.chat import AIChatParam
+from backend.plugin.ai.enums import AIChatReasoningEffortType, AIProviderType
+from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
 if TYPE_CHECKING:
     from anthropic.types.beta import BetaThinkingConfigEnabledParam
@@ -18,13 +16,9 @@ if TYPE_CHECKING:
     from openai.types.shared.reasoning_effort import ReasoningEffort
 
 
-class StructuredOutputBase(BaseModel):
-    """结构化输出基础模型"""
-
-    model_config = ConfigDict(extra='forbid')
-
-
-def _build_openai_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> OpenAIChatModelSettings:
+def _build_openai_model_settings(
+    *, chat: AIChatForwardedPropsParam, common_settings: dict[str, Any]
+) -> OpenAIChatModelSettings:
     """
     构建 OpenAI 模型配置
 
@@ -55,7 +49,9 @@ def _build_openai_model_settings(*, chat: AIChatParam, common_settings: dict[str
     return OpenAIChatModelSettings(**openai_settings)
 
 
-def _build_anthropic_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> AnthropicModelSettings:
+def _build_anthropic_model_settings(
+    *, chat: AIChatForwardedPropsParam, common_settings: dict[str, Any]
+) -> AnthropicModelSettings:
     """
     构建 Anthropic 模型配置
 
@@ -83,7 +79,9 @@ def _build_anthropic_model_settings(*, chat: AIChatParam, common_settings: dict[
     return AnthropicModelSettings(**anthropic_settings)
 
 
-def _build_google_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> GoogleModelSettings:
+def _build_google_model_settings(
+    *, chat: AIChatForwardedPropsParam, common_settings: dict[str, Any]
+) -> GoogleModelSettings:
     """
     构建 Google 模型配置
 
@@ -118,7 +116,9 @@ def _build_xai_model_settings(*, common_settings: dict[str, Any]) -> XaiModelSet
     })
 
 
-def _build_openrouter_model_settings(*, chat: AIChatParam, common_settings: dict[str, Any]) -> OpenRouterModelSettings:
+def _build_openrouter_model_settings(
+    *, chat: AIChatForwardedPropsParam, common_settings: dict[str, Any]
+) -> OpenRouterModelSettings:
     """
     构建 OpenRouter 模型配置
 
@@ -146,7 +146,7 @@ def _build_openrouter_model_settings(*, chat: AIChatParam, common_settings: dict
     return OpenRouterModelSettings(**openrouter_settings)
 
 
-def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSettings | Any:
+def build_model_settings(*, chat: AIChatForwardedPropsParam, provider_type: int) -> ModelSettings | Any:
     """
     构建模型配置
 
@@ -185,72 +185,3 @@ def build_model_settings(*, chat: AIChatParam, provider_type: int) -> ModelSetti
         return _build_openrouter_model_settings(chat=chat, common_settings=common_settings)
 
     return ModelSettings(**common_settings)
-
-
-def build_schema_type(schema: dict[str, Any], *, model_name: str) -> Any:  # noqa: C901
-    schema_type = schema.get('type')
-    if isinstance(schema_type, list):
-        non_null_types = [item for item in schema_type if item != 'null']
-        if len(non_null_types) == 1:
-            return build_schema_type({**schema, 'type': non_null_types[0]}, model_name=model_name) | None
-        return Any
-
-    if schema_type == 'string':
-        return str
-    if schema_type == 'integer':
-        return int
-    if schema_type == 'number':
-        return float
-    if schema_type == 'boolean':
-        return bool
-    if schema_type == 'null':
-        return None
-    if schema_type == 'array':
-        return list[Any]
-    if schema_type == 'object' or 'properties' in schema:
-        fields: dict[str, tuple[Any, Any]] = {}
-        required = set(schema.get('required', []))
-        for field_name, field_schema in schema.get('properties', {}).items():
-            field_type = build_schema_type(field_schema, model_name=f'{model_name}{field_name.title()}')
-            if field_name in required:
-                fields[field_name] = (field_type, Field(description=field_schema.get('description', field_name)))
-            else:
-                fields[field_name] = (
-                    field_type | None,
-                    Field(default=None, description=field_schema.get('description', field_name)),
-                )
-        if not fields:
-            return dict[str, Any]
-        return create_model(model_name, __base__=StructuredOutputBase, **fields)
-
-    if 'anyOf' in schema:
-        variants = [build_schema_type(item, model_name=f'{model_name}Variant') for item in schema['anyOf']]
-        if not variants:
-            return Any
-        variant_type = variants[0]
-        for item in variants[1:]:
-            variant_type = variant_type | item
-        return variant_type
-
-    return Any
-
-
-def build_output_type(*, chat: AIChatParam) -> Any:
-    if chat.output_mode == AIChatOutputModeType.text:
-        return str
-    if not chat.output_schema:
-        raise errors.RequestError(msg='结构化输出模式必须提供 output_schema')
-
-    schema_type = build_schema_type(
-        chat.output_schema,
-        model_name=chat.output_schema_name or 'ChatStructuredOutput',
-    )
-
-    if chat.output_mode == AIChatOutputModeType.tool:
-        return ToolOutput(schema_type, name=chat.output_schema_name, description=chat.output_schema_description)
-    if chat.output_mode == AIChatOutputModeType.native:
-        return NativeOutput(schema_type, name=chat.output_schema_name)
-    if chat.output_mode == AIChatOutputModeType.prompted:
-        return PromptedOutput(schema_type, name=chat.output_schema_name, description=chat.output_schema_description)
-
-    raise errors.RequestError(msg='不支持的输出模式')
