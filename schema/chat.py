@@ -53,7 +53,6 @@ class AIChatModelSettingsParam(SchemaBase):
 class AIChatOutputParam(SchemaBase):
     """聊天输出控制参数"""
 
-    mode: str = Field(default='create', description='当前聊天接口仅支持 create')
     generation_type: AIChatGenerationType = Field(default=AIChatGenerationType.text, description='生成类型')
     output_mode: AIChatOutputModeType = Field(default=AIChatOutputModeType.text, description='输出模式')
     output_schema: dict[str, Any] | None = Field(default=None, description='结构化输出 JSON Schema')

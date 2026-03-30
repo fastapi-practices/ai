@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
+from pydantic_ai.ui import SSE_CONTENT_TYPE
 
 from backend.common.security.jwt import DependsJwtAuth
 from backend.database.db import CurrentSessionTransaction
@@ -21,5 +22,5 @@ async def create_ai_chat_completion(
         db=db,
         user_id=request.user.id,
         body=await request.body(),
-        accept=request.headers.get('accept'),
+        accept=request.headers.get('accept', SSE_CONTENT_TYPE),
     )
