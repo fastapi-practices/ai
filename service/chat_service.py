@@ -17,7 +17,7 @@ from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
-from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
+from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam, AIChatRegenerateParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
 from backend.plugin.ai.tools.chat_builtin_tools import register_chat_builtin_tools
@@ -61,26 +61,32 @@ class ChatService:
 
     @staticmethod
     def _prepare_run_input(
-        obj: AIChatCompletionParam,
         *,
+        thread_id: str | None,
+        forwarded_props: AIChatForwardedPropsParam,
         default_conversation_id: str | None = None,
         expected_conversation_id: str | None = None,
     ) -> RunAgentInput:
         """
         解析并补全 AG-UI 运行参数
 
-        :param obj: 请求体
+        :param thread_id: 对话 ID
+        :param forwarded_props: 聊天扩展参数
         :param default_conversation_id: 默认对话 ID
         :param expected_conversation_id: 期望对话 ID
         :return:
         """
-        payload = obj.model_dump()
-        if not payload.get('thread_id'):
-            payload['thread_id'] = default_conversation_id or uuid4_str()
-        if not payload.get('run_id'):
-            payload['run_id'] = uuid4_str()
-
-        run_input = RunAgentInput.model_validate(payload)
+        conversation_id = thread_id or default_conversation_id or uuid4_str()
+        run_input = RunAgentInput.model_validate({
+            'thread_id': conversation_id,
+            'run_id': uuid4_str(),
+            'parent_run_id': None,
+            'state': {},
+            'messages': [],
+            'tools': [],
+            'context': [],
+            'forwarded_props': forwarded_props.model_dump(),
+        })
 
         if expected_conversation_id is not None and run_input.thread_id != expected_conversation_id:
             raise errors.RequestError(msg='请求体中的对话 ID 与路径不一致')
@@ -377,12 +383,11 @@ class ChatService:
         :param accept: Accept 请求头
         :return:
         """
-        run_input = ChatService._prepare_run_input(obj)
-        if not run_input.messages:
+        if not obj.messages:
             raise errors.RequestError(msg='聊天消息不能为空')
 
         try:
-            input_messages = list(AGUIAdapter.load_messages(run_input.messages))
+            input_messages = list(AGUIAdapter.load_messages(obj.messages))
         except Exception as e:
             log.warning(f'AG-UI messages 加载失败: {e}')
             raise errors.RequestError(msg='聊天消息格式非法') from e
@@ -410,6 +415,11 @@ class ChatService:
         prompt = ' '.join(part.strip() for part in prompt_parts if part.strip()).strip()
         if not prompt and not has_binary_input:
             raise errors.RequestError(msg='最后一条用户消息不能为空')
+
+        run_input = ChatService._prepare_run_input(
+            thread_id=obj.thread_id,
+            forwarded_props=obj.forwarded_props,
+        )
 
         forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
         agent = await ChatService._build_agent(db=db, forwarded_props=forwarded_props)
@@ -489,7 +499,7 @@ class ChatService:
         user_id: int,
         conversation_id: str,
         message_id: int,
-        obj: AIChatCompletionParam,
+        obj: AIChatRegenerateParam,
         accept: str | None,
     ) -> StreamingResponse:
         """
@@ -504,7 +514,8 @@ class ChatService:
         :return:
         """
         run_input = ChatService._prepare_run_input(
-            obj,
+            thread_id=obj.thread_id,
+            forwarded_props=obj.forwarded_props,
             default_conversation_id=conversation_id,
             expected_conversation_id=conversation_id,
         )
@@ -566,7 +577,7 @@ class ChatService:
         user_id: int,
         conversation_id: str,
         message_id: int,
-        obj: AIChatCompletionParam,
+        obj: AIChatRegenerateParam,
         accept: str | None,
     ) -> StreamingResponse:
         """
@@ -581,7 +592,8 @@ class ChatService:
         :return:
         """
         run_input = ChatService._prepare_run_input(
-            obj,
+            thread_id=obj.thread_id,
+            forwarded_props=obj.forwarded_props,
             default_conversation_id=conversation_id,
             expected_conversation_id=conversation_id,
         )
