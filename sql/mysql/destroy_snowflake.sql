@@ -2,11 +2,10 @@ delete from sys_menu
 where name in (
     'AIChat',
     'AIQuickPhraseManage',
-    'AIProviderManage',
+    'AIModelService',
     'AddAIProvider',
     'EditAIProvider',
     'DeleteAIProvider',
-    'AIModelManage',
     'AddAIModel',
     'EditAIModel',
     'DeleteAIModel',
