@@ -1,7 +1,13 @@
 from pydantic import Field
 
 from backend.common.schema import SchemaBase
-from backend.plugin.ai.enums import AIChatAttachmentSourceType, AIChatAttachmentType, AIMessageRoleType
+from backend.plugin.ai.enums import (
+    AIChatAttachmentSourceType,
+    AIChatAttachmentType,
+    AIMessageBlockType,
+    AIMessageRoleType,
+    AIMessageType,
+)
 
 
 class UpdateAIMessageParam(SchemaBase):
@@ -10,14 +16,16 @@ class UpdateAIMessageParam(SchemaBase):
     content: str = Field(description='消息内容')
 
 
-class GetAIMessageAttachmentDetail(SchemaBase):
-    """消息附件详情"""
+class GetAIMessageBlockDetail(SchemaBase):
+    """AI 消息内容块详情"""
 
-    type: AIChatAttachmentType = Field(description='附件类型')
-    source_type: AIChatAttachmentSourceType = Field(description='附件来源类型')
-    mime_type: str = Field(description='附件内容类型')
-    name: str | None = Field(default=None, description='附件名称')
-    url: str = Field(description='附件地址')
+    type: AIMessageBlockType = Field(description='内容块类型')
+    text: str | None = Field(default=None, description='文本内容')
+    file_type: AIChatAttachmentType | None = Field(default=None, description='文件类型')
+    source_type: AIChatAttachmentSourceType | None = Field(default=None, description='文件来源类型')
+    mime_type: str | None = Field(default=None, description='文件内容类型')
+    name: str | None = Field(default=None, description='文件名称')
+    url: str | None = Field(default=None, description='文件地址')
 
 
 class GetAIMessageDetail(SchemaBase):
@@ -27,6 +35,8 @@ class GetAIMessageDetail(SchemaBase):
     conversation_id: str | None = Field(default=None, description='对话 ID')
     message_index: int = Field(description='展示消息索引')
     role: AIMessageRoleType = Field(description='消息角色')
-    timestamp: str = Field(description='消息时间')
-    content: str = Field(description='消息内容')
-    attachments: list[GetAIMessageAttachmentDetail] = Field(default_factory=list, description='消息附件列表')
+    message_type: AIMessageType = Field(default=AIMessageType.normal, description='消息类型')
+    created_time: str = Field(description='消息时间')
+    provider_id: int | None = Field(default=None, description='供应商 ID')
+    model_id: str | None = Field(default=None, description='模型 ID')
+    blocks: list[GetAIMessageBlockDetail] = Field(default_factory=list, description='消息内容块列表')

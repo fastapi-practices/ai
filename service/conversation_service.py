@@ -44,6 +44,8 @@ class AIConversationService:
             model_messages,
             conversation_id=conversation.conversation_id,
             message_ids=[row.id for row in message_rows],
+            provider_ids=[row.provider_id for row in message_rows],
+            model_ids=[row.model_id for row in message_rows],
         )
         return GetAIConversationDetail(
             id=conversation.id,

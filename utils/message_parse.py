@@ -15,8 +15,17 @@ from pydantic_ai import (
     VideoUrl,
 )
 
-from backend.plugin.ai.enums import AIChatAttachmentSourceType, AIChatAttachmentType, AIMessageRoleType
-from backend.plugin.ai.schema.message import GetAIMessageAttachmentDetail, GetAIMessageDetail
+from backend.plugin.ai.enums import (
+    AIChatAttachmentSourceType,
+    AIChatAttachmentType,
+    AIMessageBlockType,
+    AIMessageRoleType,
+    AIMessageType,
+)
+from backend.plugin.ai.schema.message import (
+    GetAIMessageBlockDetail,
+    GetAIMessageDetail,
+)
 from backend.utils.timezone import timezone
 
 
@@ -36,49 +45,53 @@ def get_attachment_type(content: BinaryContent) -> AIChatAttachmentType:
     return AIChatAttachmentType.document
 
 
-def build_attachment_detail(
+def build_file_block(
     attachment: ImageUrl | AudioUrl | VideoUrl | DocumentUrl | BinaryContent,
-) -> GetAIMessageAttachmentDetail:
+) -> GetAIMessageBlockDetail:
     """
-    构建消息附件详情
+    构建文件内容块
 
     :param attachment: 附件
     :return:
     """
-    if isinstance(attachment, ImageUrl):
-        return GetAIMessageAttachmentDetail(
-            type=AIChatAttachmentType.image,
-            source_type=AIChatAttachmentSourceType.url,
-            mime_type=attachment.media_type,
-            url=attachment.url,
-        )
-    if isinstance(attachment, AudioUrl):
-        return GetAIMessageAttachmentDetail(
-            type=AIChatAttachmentType.audio,
-            source_type=AIChatAttachmentSourceType.url,
-            mime_type=attachment.media_type,
-            url=attachment.url,
-        )
-    if isinstance(attachment, VideoUrl):
-        return GetAIMessageAttachmentDetail(
-            type=AIChatAttachmentType.video,
-            source_type=AIChatAttachmentSourceType.url,
-            mime_type=attachment.media_type,
-            url=attachment.url,
-        )
-    if isinstance(attachment, DocumentUrl):
-        return GetAIMessageAttachmentDetail(
-            type=AIChatAttachmentType.document,
-            source_type=AIChatAttachmentSourceType.url,
-            mime_type=attachment.media_type,
-            url=attachment.url,
-        )
-    return GetAIMessageAttachmentDetail(
-        type=get_attachment_type(attachment),
-        source_type=AIChatAttachmentSourceType.base64,
+    attachment_identifier = attachment.identifier
+    attachment_name = ((attachment.vendor_metadata or {}).get('filename')) or attachment_identifier
+    if isinstance(attachment, BinaryContent):
+        file_type = get_attachment_type(attachment)
+        source_type = AIChatAttachmentSourceType.base64
+        url = attachment.data_uri
+    else:
+        file_type = {
+            ImageUrl: AIChatAttachmentType.image,
+            AudioUrl: AIChatAttachmentType.audio,
+            VideoUrl: AIChatAttachmentType.video,
+            DocumentUrl: AIChatAttachmentType.document,
+        }[type(attachment)]
+        source_type = AIChatAttachmentSourceType.url
+        url = attachment.url
+
+    return GetAIMessageBlockDetail(
+        type=AIMessageBlockType.file,
+        file_type=file_type,
+        source_type=source_type,
         mime_type=attachment.media_type,
-        url=attachment.data_uri,
+        name=attachment_name,
+        url=url,
     )
+
+
+def build_text_block(*, type_: AIMessageBlockType, text: str) -> GetAIMessageBlockDetail | None:
+    """
+    构建文本内容块
+
+    :param type_: 内容块类型
+    :param text: 文本
+    :return:
+    """
+    normalized_text = text.strip()
+    if not normalized_text:
+        return None
+    return GetAIMessageBlockDetail(type=type_, text=normalized_text)
 
 
 def serialize_messages(  # noqa: C901
@@ -86,6 +99,8 @@ def serialize_messages(  # noqa: C901
     *,
     conversation_id: str | None = None,
     message_ids: Sequence[int | None] | None = None,
+    provider_ids: Sequence[int | None] | None = None,
+    model_ids: Sequence[str | None] | None = None,
 ) -> list[GetAIMessageDetail]:
     """
     序列化模型消息
@@ -98,29 +113,36 @@ def serialize_messages(  # noqa: C901
     parsed_messages: list[GetAIMessageDetail] = []
     for model_message_index, message in enumerate(messages):
         message_id = message_ids[model_message_index] if message_ids else None
+        provider_id = provider_ids[model_message_index] if provider_ids else None
+        model_id = model_ids[model_message_index] if model_ids else None
 
         if isinstance(message, ModelRequest) and message.parts:
             first_part = message.parts[0]
             if isinstance(first_part, UserPromptPart):
-                attachments: list[GetAIMessageAttachmentDetail] = []
-                text_parts: list[str] = []
+                blocks: list[GetAIMessageBlockDetail] = []
                 if isinstance(first_part.content, str):
-                    text_parts.append(first_part.content)
+                    text_block = build_text_block(type_=AIMessageBlockType.text, text=first_part.content)
+                    if text_block:
+                        blocks.append(text_block)
                 else:
                     for item in first_part.content:
                         if isinstance(item, str):
-                            text_parts.append(item)
+                            text_block = build_text_block(type_=AIMessageBlockType.text, text=item)
+                            if text_block:
+                                blocks.append(text_block)
                             continue
                         if isinstance(item, (ImageUrl, AudioUrl, VideoUrl, DocumentUrl, BinaryContent)):
-                            attachments.append(build_attachment_detail(item))
+                            blocks.append(build_file_block(item))
                 parsed_messages.append(
                     GetAIMessageDetail(
                         message_id=message_id,
                         message_index=len(parsed_messages),
                         role=AIMessageRoleType.user,
-                        timestamp=first_part.timestamp.isoformat(),
-                        content=' '.join(text_parts).strip(),
-                        attachments=attachments,
+                        message_type=AIMessageType.normal,
+                        created_time=first_part.timestamp.isoformat(),
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        blocks=blocks,
                         conversation_id=conversation_id,
                     )
                 )
@@ -129,42 +151,35 @@ def serialize_messages(  # noqa: C901
         if not isinstance(message, ModelResponse):
             continue
 
-        timestamp = message.timestamp.isoformat() if message.timestamp else timezone.now().isoformat()
+        created_time = message.timestamp.isoformat() if message.timestamp else timezone.now().isoformat()
+        message_type = AIMessageType.error if (message.metadata or {}).get('is_error') else AIMessageType.normal
+        blocks: list[GetAIMessageBlockDetail] = []
         for part in message.parts:
-            role: AIMessageRoleType | None = None
-            content = ''
-
             if isinstance(part, ThinkingPart):
-                role = AIMessageRoleType.thinking
-                content = part.content
-            elif isinstance(part, TextPart):
-                role = AIMessageRoleType.model
-                content = part.content
-            if role is None:
-                if isinstance(part, FilePart):
-                    parsed_messages.append(
-                        GetAIMessageDetail(
-                            message_id=message_id,
-                            message_index=len(parsed_messages),
-                            role=AIMessageRoleType.model,
-                            timestamp=timestamp,
-                            content='',
-                            attachments=[build_attachment_detail(part.content)],
-                            conversation_id=conversation_id,
-                        )
-                    )
+                reasoning_block = build_text_block(type_=AIMessageBlockType.reasoning, text=part.content)
+                if reasoning_block:
+                    blocks.append(reasoning_block)
                 continue
+            if isinstance(part, TextPart):
+                text_block = build_text_block(type_=AIMessageBlockType.text, text=part.content)
+                if text_block:
+                    blocks.append(text_block)
+                continue
+            if isinstance(part, FilePart):
+                blocks.append(build_file_block(part.content))
 
-            parsed_messages.append(
-                GetAIMessageDetail(
-                    message_id=message_id,
-                    message_index=len(parsed_messages),
-                    role=role,
-                    timestamp=timestamp,
-                    content=content,
-                    attachments=[],
-                    conversation_id=conversation_id,
-                )
+        parsed_messages.append(
+            GetAIMessageDetail(
+                message_id=message_id,
+                message_index=len(parsed_messages),
+                role=AIMessageRoleType.assistant,
+                message_type=message_type,
+                created_time=created_time,
+                provider_id=provider_id,
+                model_id=model_id or message.model_name,
+                blocks=blocks,
+                conversation_id=conversation_id,
             )
+        )
 
     return parsed_messages

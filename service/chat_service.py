@@ -1,8 +1,24 @@
+from base64 import b64decode
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
-from ag_ui.core import RunAgentInput
-from pydantic_ai import Agent, BinaryImage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, UserPromptPart
+from ag_ui.core import BinaryInputContent, RunAgentInput, RunErrorEvent, TextInputContent, UserMessage
+from pydantic_ai import (
+    Agent,
+    AudioUrl,
+    BinaryContent,
+    BinaryImage,
+    DocumentUrl,
+    ImageUrl,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+    VideoUrl,
+)
 from pydantic_ai.builtin_tools import ImageGenerationTool
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_core import to_jsonable_python
@@ -44,8 +60,30 @@ class ChatConversationState:
     context_start_index: int
 
 
+@dataclass(slots=True)
+class ChatCompletionPersistence:
+    """聊天结果持久化上下文"""
+
+    conversation_id: str
+    user_id: int
+    forwarded_props: AIChatForwardedPropsParam
+    conversation: Any | None
+    title: str
+    replace_message_row_ids: list[int] | None
+    replace_start_message_index: int | None
+    replace_end_message_index: int | None
+    base_message_index: int
+    result_offset: int
+
+
 class ChatService:
     """聊天服务"""
+
+    FILE_URL_CONSTRUCTORS = {
+        'image': ImageUrl,
+        'video': VideoUrl,
+        'audio': AudioUrl,
+    }
 
     @staticmethod
     def _normalize_title(title: str) -> str:
@@ -73,6 +111,100 @@ class ChatService:
         )
 
     @staticmethod
+    def _build_binary_user_content(
+        part: BinaryInputContent,
+    ) -> BinaryContent | ImageUrl | AudioUrl | VideoUrl | DocumentUrl:
+        """
+        构建二进制用户输入内容
+
+        :param part: AG-UI 二进制输入
+        :return:
+        """
+        vendor_metadata = {'filename': part.filename} if part.filename else None
+        if part.url:
+            try:
+                parsed_binary = BinaryContent.from_data_uri(part.url)
+            except ValueError:
+                media_type_prefix = part.mime_type.split('/', 1)[0]
+                constructor = ChatService.FILE_URL_CONSTRUCTORS.get(media_type_prefix, DocumentUrl)
+                return constructor(
+                    url=part.url,
+                    media_type=part.mime_type,
+                    identifier=part.id,
+                    vendor_metadata=vendor_metadata,
+                )
+            return BinaryContent.narrow_type(
+                BinaryContent(
+                    data=parsed_binary.data,
+                    media_type=parsed_binary.media_type,
+                    identifier=part.id,
+                    vendor_metadata=vendor_metadata,
+                )
+            )
+        if part.data:
+            return BinaryContent.narrow_type(
+                BinaryContent(
+                    data=b64decode(part.data),
+                    media_type=part.mime_type,
+                    identifier=part.id,
+                    vendor_metadata=vendor_metadata,
+                )
+            )
+        raise errors.RequestError(msg='聊天消息格式非法')
+
+    @staticmethod
+    def _extract_prompt(first_part: UserPromptPart) -> tuple[str, bool]:
+        """
+        提取用户输入中的文本提示和二进制输入标记
+
+        :param first_part: 用户输入内容块
+        :return:
+        """
+        prompt_parts: list[str] = []
+        has_binary_input = False
+        if isinstance(first_part.content, str):
+            prompt_parts.append(first_part.content)
+        else:
+            for item in first_part.content:
+                if isinstance(item, str):
+                    prompt_parts.append(item)
+                else:
+                    has_binary_input = True
+        prompt = ' '.join(part.strip() for part in prompt_parts if part.strip()).strip()
+        return prompt, has_binary_input
+
+    @staticmethod
+    def _load_current_user_message(message: UserMessage) -> ModelRequest:
+        """
+        解析当前轮用户消息，保留文件标识和文件名
+
+        :param message: 用户消息
+        :return:
+        """
+        content = message.content
+        if isinstance(content, str):
+            return ModelRequest(parts=[UserPromptPart(content=content)])
+
+        user_prompt_content: list[Any] = []
+        for part in content:
+            if isinstance(part, TextInputContent):
+                user_prompt_content.append(part.text)
+                continue
+            if not isinstance(part, BinaryInputContent):
+                raise errors.RequestError(msg='聊天消息格式非法')
+            user_prompt_content.append(ChatService._build_binary_user_content(part))
+
+        if not user_prompt_content:
+            raise errors.RequestError(msg='聊天消息不能为空')
+
+        prompt_content = (
+            user_prompt_content[0]
+            if len(user_prompt_content) == 1 and isinstance(user_prompt_content[0], str)
+            else user_prompt_content
+        )
+        return ModelRequest(parts=[UserPromptPart(content=prompt_content)])
+
+    @staticmethod
     def _prepare_run_input(
         *,
         thread_id: str | None,
@@ -81,7 +213,7 @@ class ChatService:
         expected_conversation_id: str | None = None,
     ) -> RunAgentInput:
         """
-        解析并补全 AG-UI 运行参数
+        解析并补全运行参数
 
         :param thread_id: 对话 ID
         :param forwarded_props: 聊天扩展参数
@@ -224,26 +356,239 @@ class ChatService:
             context_start_index=context_start_index,
         )
 
-    async def _persist_completion_input_messages(
+    async def _persist_completion_messages(
         self,
         *,
-        conversation_id: str,
-        user_id: int,
-        forwarded_props: AIChatForwardedPropsParam,
-        title: str,
+        db: AsyncSession,
+        persistence: ChatCompletionPersistence,
         messages: list[Any],
     ) -> None:
         """
-        在流式响应开始前持久化会话和输入消息
+        持久化模型输出消息
 
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :param forwarded_props: 聊天扩展参数
-        :param title: 对话标题
+        :param db: 数据库会话
+        :param persistence: 持久化上下文
         :param messages: 待持久化消息
         :return:
         """
+        if not messages:
+            return
+
         payload_messages = to_jsonable_python(messages)
+        assert isinstance(payload_messages, list)
+
+        insert_message_index = persistence.base_message_index
+        current_conversation = persistence.conversation or await ai_conversation_dao.get_by_conversation_id(
+            db, persistence.conversation_id
+        )
+        normalized_title = self._normalize_title(persistence.title)
+
+        payload = {
+            'conversation_id': persistence.conversation_id,
+            'title': normalized_title,
+            'provider_id': persistence.forwarded_props.provider_id,
+            'model_id': persistence.forwarded_props.model_id,
+            'user_id': current_conversation.user_id if current_conversation else persistence.user_id,
+            'pinned_time': current_conversation.pinned_time if current_conversation else None,
+            'context_start_message_id': current_conversation.context_start_message_id if current_conversation else None,
+            'context_cleared_time': current_conversation.context_cleared_time if current_conversation else None,
+        }
+        if current_conversation:
+            await ai_conversation_dao.update(db, current_conversation.id, UpdateAIConversationParam(**payload))
+        else:
+            await ai_conversation_dao.create(db, CreateAIConversationParam(**payload))
+
+        if (
+            persistence.replace_message_row_ids is not None
+            and persistence.replace_start_message_index is not None
+            and persistence.replace_end_message_index is not None
+        ):
+            replace_count = persistence.replace_end_message_index - persistence.replace_start_message_index + 1
+            shared_count = min(replace_count, len(payload_messages))
+
+            for index in range(shared_count):
+                await ai_message_dao.update(
+                    db,
+                    persistence.replace_message_row_ids[index],
+                    {
+                        'provider_id': persistence.forwarded_props.provider_id,
+                        'model_id': persistence.forwarded_props.model_id,
+                        'message_index': persistence.replace_start_message_index + index,
+                        'message': payload_messages[index],
+                    },
+                )
+
+            if len(payload_messages) < replace_count:
+                await ai_message_dao.delete_message_index_range(
+                    db,
+                    persistence.conversation_id,
+                    persistence.replace_start_message_index + len(payload_messages),
+                    persistence.replace_end_message_index,
+                )
+                await ai_message_dao.update_message_indexes_offset(
+                    db,
+                    persistence.conversation_id,
+                    persistence.replace_end_message_index + 1,
+                    len(payload_messages) - replace_count,
+                )
+                return
+
+            if len(payload_messages) == replace_count:
+                return
+
+            await ai_message_dao.update_message_indexes_offset(
+                db,
+                persistence.conversation_id,
+                persistence.replace_end_message_index + 1,
+                len(payload_messages) - replace_count,
+            )
+            payload_messages = payload_messages[replace_count:]
+            insert_message_index = persistence.replace_end_message_index + 1
+
+        await ai_message_dao.bulk_create(
+            db,
+            [
+                {
+                    'conversation_id': persistence.conversation_id,
+                    'provider_id': persistence.forwarded_props.provider_id,
+                    'model_id': persistence.forwarded_props.model_id,
+                    'message_index': insert_message_index + index,
+                    'message': message,
+                }
+                for index, message in enumerate(payload_messages)
+            ],
+        )
+
+    async def _persist_completion_result(
+        self,
+        result: Any,
+        *,
+        db: AsyncSession,
+        persistence: ChatCompletionPersistence,
+    ) -> None:
+        """
+        持久化成功完成的聊天结果
+
+        :param result: 运行结果
+        :param db: 数据库会话
+        :param persistence: 持久化上下文
+        :return:
+        """
+        persisted_messages = to_jsonable_python(list(result.all_messages()))
+        assert isinstance(persisted_messages, list)
+        await self._persist_completion_messages(
+            db=db,
+            persistence=persistence,
+            messages=persisted_messages[persistence.result_offset :],
+        )
+
+    def _stream_response(
+        self,
+        *,
+        db: AsyncSession,
+        user_id: int,
+        agent: Agent,
+        run_input: RunAgentInput,
+        accept: str | None,
+        message_history: list[Any],
+        on_complete: Any,
+        persistence: ChatCompletionPersistence,
+    ) -> StreamingResponse:
+        """
+        运行聊天代理并返回流式响应
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param agent: 聊天代理
+        :param run_input: 运行参数
+        :param accept: Accept 请求头
+        :param message_history: 消息历史
+        :param on_complete: 完成回调
+        :param persistence: 持久化上下文
+        :return:
+        """
+
+        adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
+        event_stream = adapter.run_stream(
+            deps=ChatAgentDeps(db=db, user_id=user_id),
+            message_history=message_history,
+            on_complete=on_complete,
+        )
+
+        async def stream_with_error_persistence() -> AsyncIterator[Any]:
+            error_persisted = False
+            async for event in event_stream:
+                if isinstance(event, RunErrorEvent) and not error_persisted:
+                    error_persisted = True
+                    raw_error_message = event.message.strip() if event.message else ''
+                    try:
+                        error_message = raw_error_message or '模型请求失败，请稍后重试'
+                        await self._persist_completion_messages(
+                            db=db,
+                            persistence=persistence,
+                            messages=[
+                                ModelResponse(
+                                    parts=[TextPart(content=f'模型请求失败：{error_message}')],
+                                    model_name=persistence.forwarded_props.model_id,
+                                    metadata={
+                                        'is_error': True,
+                                        'error_message': error_message,
+                                    },
+                                )
+                            ],
+                        )
+                    except Exception as e:
+                        log.exception(f'持久化聊天失败消息异常: {e}')
+                    else:
+                        log.warning(
+                            f'聊天运行失败，已写入对话记录 conversation_id={persistence.conversation_id}: {raw_error_message}'  # noqa: E501
+                        )
+                yield event
+
+        response = adapter.streaming_response(stream_with_error_persistence())
+        response.headers['X-Accel-Buffering'] = 'no'
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
+
+    async def create_completion(
+        self, *, db: AsyncSession, user_id: int, obj: AIChatCompletionParam, accept: str | None
+    ) -> StreamingResponse:
+        """
+        创建流式对话
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param obj: 请求体
+        :param accept: Accept 请求头
+        :return:
+        """
+        try:
+            current_message = self._load_current_user_message(obj.message)
+        except Exception as e:
+            log.warning(f'聊天消息加载失败: {e}')
+            if isinstance(e, errors.BaseExceptionError):
+                raise
+            raise errors.RequestError(msg='聊天消息格式非法') from e
+        if not current_message.parts:
+            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
+        first_part = current_message.parts[0]
+        if not isinstance(first_part, UserPromptPart):
+            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
+
+        prompt, has_binary_input = self._extract_prompt(first_part)
+        if not prompt and not has_binary_input:
+            raise errors.RequestError(msg='当前轮用户消息不能为空')
+
+        run_input = self._prepare_run_input(
+            thread_id=obj.thread_id,
+            forwarded_props=obj.forwarded_props,
+        )
+
+        forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
+        agent = await self._build_agent(db=db, forwarded_props=forwarded_props)
+
+        conversation_id = run_input.thread_id
+        payload_messages = to_jsonable_python([current_message])
         assert isinstance(payload_messages, list)
 
         # 使用独立事务先提交用户输入，避免流式阶段异常导致整段会话回滚
@@ -254,7 +599,7 @@ class ChatService:
 
             payload = {
                 'conversation_id': conversation_id,
-                'title': conversation.title if conversation else self._normalize_title(title),
+                'title': conversation.title if conversation else self._normalize_title(prompt),
                 'provider_id': forwarded_props.provider_id,
                 'model_id': forwarded_props.model_id,
                 'user_id': conversation.user_id if conversation else user_id,
@@ -281,233 +626,6 @@ class ChatService:
                     for index, message in enumerate(payload_messages)
                 ],
             )
-
-    def _build_completion_callback(
-        self,
-        *,
-        db: AsyncSession,
-        conversation_id: str,
-        user_id: int,
-        forwarded_props: AIChatForwardedPropsParam,
-        conversation: Any | None,
-        title: str,
-        replace_message_row_ids: list[int] | None,
-        replace_start_message_index: int | None,
-        replace_end_message_index: int | None,
-        base_message_index: int,
-        result_offset: int,
-    ) -> Any:
-        """
-        构建完成后持久化回调
-
-        :param db: 数据库会话
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :param forwarded_props: 聊天扩展参数
-        :param conversation: 对话对象
-        :param title: 对话标题
-        :param replace_message_row_ids: 需要替换的消息 ID 列表
-        :param replace_start_message_index: 替换起始消息索引
-        :param replace_end_message_index: 替换结束消息索引
-        :param base_message_index: 新消息起始索引
-        :param result_offset: 结果偏移量
-        :return:
-        """
-
-        async def on_complete(result: Any) -> None:
-            persisted_messages = to_jsonable_python(list(result.all_messages()))
-            assert isinstance(persisted_messages, list)
-            insert_message_index = base_message_index
-            current_conversation = conversation or await ai_conversation_dao.get_by_conversation_id(db, conversation_id)
-            normalized_title = self._normalize_title(title)
-
-            payload = {
-                'conversation_id': conversation_id,
-                'title': normalized_title,
-                'provider_id': forwarded_props.provider_id,
-                'model_id': forwarded_props.model_id,
-                'user_id': current_conversation.user_id if current_conversation else user_id,
-                'pinned_time': current_conversation.pinned_time if current_conversation else None,
-                'context_start_message_id': (
-                    current_conversation.context_start_message_id if current_conversation else None
-                ),
-                'context_cleared_time': current_conversation.context_cleared_time if current_conversation else None,
-            }
-            if current_conversation:
-                await ai_conversation_dao.update(db, current_conversation.id, UpdateAIConversationParam(**payload))
-            else:
-                await ai_conversation_dao.create(db, CreateAIConversationParam(**payload))
-
-            tail_messages = persisted_messages[result_offset:]
-            if not tail_messages:
-                return
-
-            if (
-                replace_message_row_ids is not None
-                and replace_start_message_index is not None
-                and replace_end_message_index is not None
-            ):
-                replace_count = replace_end_message_index - replace_start_message_index + 1
-                shared_count = min(replace_count, len(tail_messages))
-
-                for index in range(shared_count):
-                    await ai_message_dao.update(
-                        db,
-                        replace_message_row_ids[index],
-                        {
-                            'provider_id': forwarded_props.provider_id,
-                            'model_id': forwarded_props.model_id,
-                            'message_index': replace_start_message_index + index,
-                            'message': tail_messages[index],
-                        },
-                    )
-
-                if len(tail_messages) < replace_count:
-                    await ai_message_dao.delete_message_index_range(
-                        db,
-                        conversation_id,
-                        replace_start_message_index + len(tail_messages),
-                        replace_end_message_index,
-                    )
-                    await ai_message_dao.update_message_indexes_offset(
-                        db,
-                        conversation_id,
-                        replace_end_message_index + 1,
-                        len(tail_messages) - replace_count,
-                    )
-                    return
-
-                if len(tail_messages) == replace_count:
-                    return
-
-                await ai_message_dao.update_message_indexes_offset(
-                    db,
-                    conversation_id,
-                    replace_end_message_index + 1,
-                    len(tail_messages) - replace_count,
-                )
-                tail_messages = tail_messages[replace_count:]
-                insert_message_index = replace_end_message_index + 1
-
-            await ai_message_dao.bulk_create(
-                db,
-                [
-                    {
-                        'conversation_id': conversation_id,
-                        'provider_id': forwarded_props.provider_id,
-                        'model_id': forwarded_props.model_id,
-                        'message_index': insert_message_index + index,
-                        'message': message,
-                    }
-                    for index, message in enumerate(tail_messages)
-                ],
-            )
-
-        return on_complete
-
-    @staticmethod
-    def _stream_response(
-        *,
-        db: AsyncSession,
-        user_id: int,
-        agent: Agent,
-        run_input: RunAgentInput,
-        accept: str | None,
-        message_history: list[Any],
-        on_complete: Any,
-    ) -> StreamingResponse:
-        """
-        运行聊天代理并返回流式响应
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :param agent: 聊天代理
-        :param run_input: AG-UI 运行参数
-        :param accept: Accept 请求头
-        :param message_history: 消息历史
-        :param on_complete: 完成回调
-        :return:
-        """
-
-        adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
-        event_stream = adapter.run_stream(
-            deps=ChatAgentDeps(db=db, user_id=user_id),
-            message_history=message_history,
-            on_complete=on_complete,
-        )
-
-        response = adapter.streaming_response(event_stream)
-        response.headers['X-Accel-Buffering'] = 'no'
-        response.headers['Cache-Control'] = 'no-cache'
-        return response
-
-    async def create_completion(
-        self, *, db: AsyncSession, user_id: int, obj: AIChatCompletionParam, accept: str | None
-    ) -> StreamingResponse:
-        """
-        创建流式对话
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :param obj: 请求体
-        :param accept: Accept 请求头
-        :return:
-        """
-        if not obj.messages:
-            raise errors.RequestError(msg='聊天消息不能为空')
-
-        try:
-            input_messages = list(AGUIAdapter.load_messages(obj.messages))
-        except Exception as e:
-            log.warning(f'AG-UI messages 加载失败: {e}')
-            raise errors.RequestError(msg='聊天消息格式非法') from e
-        if not input_messages:
-            raise errors.RequestError(msg='聊天消息不能为空')
-
-        last_message = input_messages[-1]
-        if not isinstance(last_message, ModelRequest) or not last_message.parts:
-            raise errors.RequestError(msg='最后一条消息必须是用户消息')
-        first_part = last_message.parts[0]
-        if not isinstance(first_part, UserPromptPart):
-            raise errors.RequestError(msg='最后一条消息必须是用户消息')
-
-        prompt_parts: list[str] = []
-        has_binary_input = False
-        if isinstance(first_part.content, str):
-            prompt_parts.append(first_part.content)
-        else:
-            for item in first_part.content:
-                if isinstance(item, str):
-                    prompt_parts.append(item)
-                else:
-                    has_binary_input = True
-
-        prompt = ' '.join(part.strip() for part in prompt_parts if part.strip()).strip()
-        if not prompt and not has_binary_input:
-            raise errors.RequestError(msg='最后一条用户消息不能为空')
-
-        run_input = self._prepare_run_input(
-            thread_id=obj.thread_id,
-            forwarded_props=obj.forwarded_props,
-        )
-
-        forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
-        agent = await self._build_agent(db=db, forwarded_props=forwarded_props)
-
-        conversation_id = run_input.thread_id
-        initial_state = await self._load_conversation_state(
-            db=db,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            must_exist=False,
-        )
-        await self._persist_completion_input_messages(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            title=initial_state.conversation.title if initial_state.conversation else prompt,
-            messages=input_messages if not initial_state.conversation else [last_message],
-        )
         state = await self._load_conversation_state(
             db=db,
             conversation_id=conversation_id,
@@ -517,8 +635,7 @@ class ChatService:
         )
         message_history = state.model_messages[state.context_start_index :]
 
-        on_complete = self._build_completion_callback(
-            db=db,
+        persistence = ChatCompletionPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
@@ -538,7 +655,8 @@ class ChatService:
             run_input=run_input,
             accept=accept,
             message_history=message_history,
-            on_complete=on_complete,
+            on_complete=partial(self._persist_completion_result, db=db, persistence=persistence),
+            persistence=persistence,
         )
 
     @staticmethod
@@ -629,8 +747,7 @@ class ChatService:
         )
 
         message_history = state.model_messages[state.context_start_index : target_index + 1]
-        on_complete = self._build_completion_callback(
-            db=db,
+        persistence = ChatCompletionPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
@@ -642,6 +759,7 @@ class ChatService:
             base_message_index=reply_start_index,
             result_offset=len(message_history),
         )
+
         return self._stream_response(
             db=db,
             user_id=user_id,
@@ -649,7 +767,8 @@ class ChatService:
             run_input=run_input,
             accept=accept,
             message_history=message_history,
-            on_complete=on_complete,
+            on_complete=partial(self._persist_completion_result, db=db, persistence=persistence),
+            persistence=persistence,
         )
 
     async def regenerate_from_response_message(
@@ -713,8 +832,7 @@ class ChatService:
         )
 
         message_history = state.model_messages[state.context_start_index : user_message_index + 1]
-        on_complete = self._build_completion_callback(
-            db=db,
+        persistence = ChatCompletionPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
@@ -734,7 +852,8 @@ class ChatService:
             run_input=run_input,
             accept=accept,
             message_history=message_history,
-            on_complete=on_complete,
+            on_complete=partial(self._persist_completion_result, db=db, persistence=persistence),
+            persistence=persistence,
         )
 
 

@@ -1,6 +1,6 @@
 from typing import Any
 
-from ag_ui.core import Message
+from ag_ui.core import UserMessage
 from pydantic import ConfigDict, Field
 
 from backend.common.schema import SchemaBase
@@ -80,7 +80,7 @@ class AIChatRequestBase(SchemaBase):
 class AIChatCompletionParam(AIChatRequestBase):
     """聊天参数"""
 
-    messages: list[Message] = Field(description='AG-UI 消息列表，最后一条必须是用户消息')
+    message: UserMessage = Field(description='当前轮用户消息')
 
 
 class AIChatRegenerateParam(AIChatRequestBase):
