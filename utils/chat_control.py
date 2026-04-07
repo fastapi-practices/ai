@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TypeAlias
 
 from pydantic_ai import ModelSettings
 from pydantic_ai.models.anthropic import AnthropicModelSettings
@@ -10,19 +10,18 @@ from pydantic_ai.models.xai import XaiModelSettings
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType, AIWebSearchType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
+ChatModelSettings: TypeAlias = (
+    ModelSettings
+    | AnthropicModelSettings
+    | GoogleModelSettings
+    | OpenAIChatModelSettings
+    | OpenAIResponsesModelSettings
+    | OpenRouterModelSettings
+    | XaiModelSettings
+)
 
-def _collect_model_settings(*, chat_metadata: AIChatForwardedPropsParam, fields: tuple[str, ...]) -> dict[str, Any]:
-    """
-    收集请求中显式传入且值非 ``None`` 的模型参数
 
-    :param chat_metadata: 聊天元数据
-    :param fields: 支持的字段列表
-    :return:
-    """
-    return chat_metadata.model_dump(include=set(fields), exclude_unset=True, exclude_none=True)
-
-
-def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_type: int) -> ModelSettings | Any:
+def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_type: int) -> ChatModelSettings:  # noqa: C901
     """
     按供应商构建模型配置
 
@@ -30,7 +29,6 @@ def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_t
     :param provider_type: 供应商类型
     :return:
     """
-
     provider = AIProviderType(provider_type)
     common_model_setting_fields = (
         'max_tokens',
@@ -46,7 +44,7 @@ def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_t
         'extra_headers',
         'extra_body',
     )
-    model_setting_fields = common_model_setting_fields
+
     if provider == AIProviderType.anthropic:
         model_setting_fields = tuple(
             field
@@ -65,36 +63,31 @@ def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_t
             for field in common_model_setting_fields
             if field not in {'timeout', 'seed', 'logit_bias', 'extra_headers', 'extra_body'}
         )
+    else:
+        model_setting_fields = common_model_setting_fields
+
+    model_settings = chat_metadata.model_dump(include=set(model_setting_fields), exclude_unset=True, exclude_none=True)
 
     if provider == AIProviderType.openai:
-        return OpenAIChatModelSettings(
-            **_collect_model_settings(chat_metadata=chat_metadata, fields=common_model_setting_fields),
-        )
+        return OpenAIChatModelSettings(**model_settings)
 
     if provider == AIProviderType.openai_responses:
-        settings = _collect_model_settings(chat_metadata=chat_metadata, fields=common_model_setting_fields)
         if chat_metadata.generation_type == AIChatGenerationType.text and chat_metadata.enable_builtin_tools:
-            settings['openai_include_code_execution_outputs'] = True
+            model_settings['openai_include_code_execution_outputs'] = True
         if chat_metadata.web_search == AIWebSearchType.builtin:
-            settings['openai_include_web_search_sources'] = True
-        return OpenAIResponsesModelSettings(**settings)
+            model_settings['openai_include_web_search_sources'] = True
+        return OpenAIResponsesModelSettings(**model_settings)
 
     if provider == AIProviderType.anthropic:
-        return AnthropicModelSettings(
-            **_collect_model_settings(chat_metadata=chat_metadata, fields=model_setting_fields),
-        )
+        return AnthropicModelSettings(**model_settings)
 
     if provider == AIProviderType.google:
-        return GoogleModelSettings(
-            **_collect_model_settings(chat_metadata=chat_metadata, fields=model_setting_fields),
-        )
+        return GoogleModelSettings(**model_settings)
 
     if provider == AIProviderType.xai:
-        return XaiModelSettings(**_collect_model_settings(chat_metadata=chat_metadata, fields=model_setting_fields))
+        return XaiModelSettings(**model_settings)
 
     if provider == AIProviderType.openrouter:
-        return OpenRouterModelSettings(
-            **_collect_model_settings(chat_metadata=chat_metadata, fields=common_model_setting_fields),
-        )
+        return OpenRouterModelSettings(**model_settings)
 
-    return ModelSettings(**_collect_model_settings(chat_metadata=chat_metadata, fields=common_model_setting_fields))
+    return ModelSettings(**model_settings)

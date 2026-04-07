@@ -82,7 +82,7 @@ class AIProviderService:
         :return:
         """
         existing_models = await ai_model_dao.get_all(db, provider_id=pk)
-        existing_status = {model.model_id: model.status for model in existing_models}
+        existing_status = {model.model_id: StatusType(model.status) for model in existing_models}
         provider_models = await self.get_models(db=db, pk=pk)
         await ai_model_dao.delete_by_provider(db, pk)
         if not provider_models:
@@ -95,7 +95,7 @@ class AIProviderService:
                     **CreateAIModelParam(
                         provider_id=pk,
                         model_id=obj.id,
-                        status=existing_status.get(obj.id, StatusType.enable),  # type: ignore
+                        status=existing_status.get(obj.id, StatusType.enable),
                     ).model_dump(),
                     'created_time': timezone.now(),
                 }

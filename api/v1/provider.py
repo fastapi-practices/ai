@@ -43,15 +43,6 @@ async def get_ai_provider_models(
     return response_base.success(data=data)
 
 
-@router.get('/{pk}/models/sync', summary='同步供应商模型', dependencies=[DependsJwtAuth])
-async def sync_ai_provider_models(
-    db: CurrentSessionTransaction,
-    pk: Annotated[int, Path(description='供应商 ID')],
-) -> ResponseModel:
-    await ai_provider_service.sync_models(db=db, pk=pk)
-    return response_base.success()
-
-
 @router.get(
     '',
     summary='分页获取所有供应商',
@@ -80,6 +71,15 @@ async def get_ai_providers_paginated(
 )
 async def create_ai_provider(db: CurrentSessionTransaction, obj: CreateAIProviderParam) -> ResponseModel:
     await ai_provider_service.create(db=db, obj=obj)
+    return response_base.success()
+
+
+@router.post('/{pk}/models/sync', summary='同步供应商模型', dependencies=[DependsJwtAuth])
+async def sync_ai_provider_models(
+    db: CurrentSessionTransaction,
+    pk: Annotated[int, Path(description='供应商 ID')],
+) -> ResponseModel:
+    await ai_provider_service.sync_models(db=db, pk=pk)
     return response_base.success()
 
 

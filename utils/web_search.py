@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic_ai.builtin_tools import AbstractBuiltinTool, WebFetchTool, WebSearchTool
 from pydantic_ai.capabilities import BuiltinTool, Toolset
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
@@ -10,13 +8,15 @@ from backend.common.exception import errors
 from backend.core.conf import settings
 from backend.plugin.ai.enums import AIWebSearchType
 
+ChatSearchCapability = BuiltinTool | Toolset
+
 
 def build_chat_search_tools(
     *,
     web_search: AIWebSearchType,
     supported_builtin_tools: frozenset[type[AbstractBuiltinTool]],
     auto_web_fetch: bool = False,
-) -> tuple[list[Any], list[Any]]:
+) -> tuple[list[object], list[ChatSearchCapability]]:
     """
     构建聊天搜索工具和能力
 
@@ -25,9 +25,8 @@ def build_chat_search_tools(
     :param auto_web_fetch: 是否在支持时自动启用 WebFetchTool
     :return:
     """
-
-    tools: list[Any] = []
-    capabilities: list[Any] = []
+    tools: list[object] = []
+    capabilities: list[ChatSearchCapability] = []
 
     if auto_web_fetch and WebFetchTool in supported_builtin_tools:
         capabilities.append(BuiltinTool(WebFetchTool()))

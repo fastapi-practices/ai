@@ -11,7 +11,6 @@ def normalize_provider_api_host(provider_type: int | AIProviderType, api_host: s
     :param api_host: API 地址
     :return:
     """
-
     api_host = api_host.strip().rstrip('/')
     if urlsplit(api_host).path.strip('/'):
         return api_host

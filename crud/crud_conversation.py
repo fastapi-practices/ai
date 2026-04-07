@@ -8,10 +8,7 @@ from sqlalchemy.sql import Select
 from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.plugin.ai.model import AIConversation
-from backend.plugin.ai.schema.conversation import (
-    CreateAIConversationParam,
-    UpdateAIConversationParam,
-)
+from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 
 
 class CRUDAIConversation(CRUDPlus[AIConversation]):

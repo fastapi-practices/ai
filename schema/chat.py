@@ -4,11 +4,7 @@ from ag_ui.core import UserMessage
 from pydantic import ConfigDict, Field
 
 from backend.common.schema import SchemaBase
-from backend.plugin.ai.enums import (
-    AIChatGenerationType,
-    AIChatThinkingType,
-    AIWebSearchType,
-)
+from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIWebSearchType
 
 
 class AIChatModelSelectParam(SchemaBase):

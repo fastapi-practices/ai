@@ -1,9 +1,9 @@
 from datetime import datetime
 
+from ag_ui.core import MessagesSnapshotEvent
 from pydantic import ConfigDict, Field
 
 from backend.common.schema import SchemaBase
-from backend.plugin.ai.schema.message import GetAIMessageDetail
 
 
 class AIConversationSchemaBase(SchemaBase):
@@ -39,13 +39,6 @@ class UpdateAIConversationPinnedParam(SchemaBase):
     is_pinned: bool = Field(description='是否置顶')
 
 
-class ClearAIConversationContextResult(SchemaBase):
-    """清除对话上下文结果"""
-
-    context_start_message_id: int | None = Field(default=None, description='上下文起始消息 ID')
-    context_cleared_time: datetime | None = Field(default=None, description='上下文清除时间')
-
-
 class GetAIConversationListItem(SchemaBase):
     """对话列表项"""
 
@@ -73,4 +66,4 @@ class GetAIConversationDetail(SchemaBase):
     context_cleared_time: datetime | None = Field(default=None, description='上下文清除时间')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
-    messages: list[GetAIMessageDetail] = Field(description='对话消息列表')
+    messages_snapshot: MessagesSnapshotEvent = Field(description='对话消息快照')

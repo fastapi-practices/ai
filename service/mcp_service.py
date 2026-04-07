@@ -13,21 +13,11 @@ from backend.plugin.ai.enums import McpType
 from backend.plugin.ai.model import Mcp
 from backend.plugin.ai.schema.mcp import CreateMcpParam, UpdateMcpParam
 
+McpToolset = MCPServerStdio | MCPServerSSE | MCPServerStreamableHTTP
+
 
 class McpService:
     """MCP 服务类"""
-
-    @staticmethod
-    def _parse_json_value(*, value: Any) -> Any:
-        """
-        解析 JSON 字段值
-
-        :param value: 原始值
-        :return:
-        """
-        if isinstance(value, str):
-            return json.loads(value)
-        return value
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int) -> Mcp:
@@ -51,11 +41,10 @@ class McpService:
         :param db: 数据库会话
         :return:
         """
-        mcps = await mcp_dao.get_all(db)
-        return mcps
+        return await mcp_dao.get_all(db)
 
     @staticmethod
-    async def get_toolsets(*, db: AsyncSession, mcp_ids: list[int]) -> list[Any]:
+    async def get_toolsets(*, db: AsyncSession, mcp_ids: list[int]) -> list[McpToolset]:
         """
         获取 MCP 工具集
 
@@ -64,12 +53,15 @@ class McpService:
         :return:
         """
         mcps = await mcp_dao.get_by_ids(db, mcp_ids)
-        toolsets: list[Any] = []
+        toolsets: list[McpToolset] = []
         for mcp in mcps:
-            headers = McpService._parse_json_value(value=mcp.headers) if mcp.headers else None
+            headers = json.loads(mcp.headers) if isinstance(mcp.headers, str) else mcp.headers
+            if headers is not None and not isinstance(headers, dict):
+                raise errors.RequestError(msg=f'MCP 请求头格式非法: {mcp.name}')
+            parsed_headers = None if headers is None else {str(key): str(value) for key, value in headers.items()}
             if mcp.type == McpType.stdio:
-                args = McpService._parse_json_value(value=mcp.args) if mcp.args else []
-                env = McpService._parse_json_value(value=mcp.env) if mcp.env else {}
+                args = json.loads(mcp.args) if isinstance(mcp.args, str) else (mcp.args or [])
+                env = json.loads(mcp.env) if isinstance(mcp.env, str) else (mcp.env or {})
                 if not isinstance(args, list):
                     raise errors.RequestError(msg=f'MCP 命令参数格式非法: {mcp.name}')
                 if not isinstance(env, dict):
@@ -88,7 +80,7 @@ class McpService:
                 toolsets.append(
                     MCPServerSSE(
                         url=mcp.url,
-                        headers=headers,
+                        headers=parsed_headers,
                         timeout=mcp.timeout,
                         read_timeout=mcp.read_timeout,
                     )
@@ -99,7 +91,7 @@ class McpService:
                 toolsets.append(
                     MCPServerStreamableHTTP(
                         url=mcp.url,
-                        headers=headers,
+                        headers=parsed_headers,
                         timeout=mcp.timeout,
                         read_timeout=mcp.read_timeout,
                     )
@@ -148,8 +140,7 @@ class McpService:
             raise errors.NotFoundError(msg='MCP 不存在')
         if mcp.name != obj.name and await mcp_dao.get_by_name(db, name=obj.name):
             raise errors.ForbiddenError(msg='MCP 已存在')
-        count = await mcp_dao.update(db, pk, obj)
-        return count
+        return await mcp_dao.update(db, pk, obj)
 
     @staticmethod
     async def delete(*, db: AsyncSession, pk: int) -> int:
@@ -160,8 +151,7 @@ class McpService:
         :param pk: MCP ID
         :return:
         """
-        count = await mcp_dao.delete(db, pk)
-        return count
+        return await mcp_dao.delete(db, pk)
 
 
 mcp_service: McpService = McpService()

@@ -85,7 +85,7 @@ class AIModelService:
         :param obj: 批量创建模型参数
         :return:
         """
-        pairs = []
+        pairs: list[tuple[int, str]] = []
         pair_set = set()
 
         for item in obj.items:
