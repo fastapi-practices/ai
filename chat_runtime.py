@@ -329,11 +329,22 @@ async def persist_completion_result(
     )
 
 
+async def ag_ui_event_encoder(stream: AsyncIterator[BaseEvent]) -> AsyncIterator[str]:
+    """
+    AG-UI 事件流编码器
+
+    :param stream: AG-UI 事件流
+    :return:
+    """
+    async for event in stream:
+        yield f'data: {event.model_dump_json(by_alias=False, exclude_none=True)}\n\n'
+
+
 def stream_response(
     *,
     db: AsyncSession,
     user_id: int,
-    agent: Agent[ChatAgentDeps, Any],
+    agent: Agent,
     run_input: RunAgentInput,
     accept: str | None,
     message_history: list[ChatModelMessage],
@@ -392,7 +403,13 @@ def stream_response(
                     log.warning(log_message)
             yield event
 
-    response = adapter.streaming_response(stream_with_error_persistence())
+    # 为了全量适配蛇形编码，而不是标准协议小驼峰，使用自定义 AG-UI 事件流编码器
+    event_stream_handler = adapter.build_event_stream()
+    response = StreamingResponse(
+        ag_ui_event_encoder(stream_with_error_persistence()),
+        headers=event_stream_handler.response_headers,
+        media_type=event_stream_handler.content_type,
+    )
     response.headers['X-Accel-Buffering'] = 'no'
     response.headers['Cache-Control'] = 'no-cache'
     return response

@@ -17,7 +17,12 @@ from backend.plugin.ai.service.conversation_service import ai_conversation_servi
 router = APIRouter()
 
 
-@router.get('/{pk}', summary='获取对话详情', dependencies=[DependsJwtAuth])
+@router.get(
+    '/{pk}',
+    summary='获取对话详情',
+    dependencies=[DependsJwtAuth],
+    response_model_by_alias=False,
+)
 async def get_conversation(
     request: Request,
     db: CurrentSession,
