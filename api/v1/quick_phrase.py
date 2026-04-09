@@ -16,7 +16,7 @@ from backend.plugin.ai.service.quick_phrase_service import ai_quick_phrase_servi
 router = APIRouter()
 
 
-@router.get('/all', summary='获取快捷短语列表', dependencies=[DependsJwtAuth])
+@router.get('/all', summary='获取所有快捷短语', dependencies=[DependsJwtAuth])
 async def get_all_ai_quick_phrases(
     request: Request, db: CurrentSession
 ) -> ResponseSchemaModel[list[GetAIQuickPhraseDetail]]:
@@ -36,7 +36,7 @@ async def get_ai_quick_phrase(
 
 @router.get(
     '',
-    summary='分页获取快捷短语',
+    summary='分页获取所有快捷短语',
     dependencies=[
         DependsJwtAuth,
         DependsPagination,

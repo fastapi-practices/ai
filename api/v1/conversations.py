@@ -34,7 +34,7 @@ async def get_conversation(
 
 @router.get(
     '',
-    summary='分页获取对话列表',
+    summary='分页获取所有对话列表',
     dependencies=[
         DependsJwtAuth,
         DependsCursorPagination,

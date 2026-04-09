@@ -60,6 +60,7 @@ class GetAIConversationDetail(SchemaBase):
     id: int = Field(description='ID')
     conversation_id: str = Field(description='对话 ID')
     title: str = Field(description='对话标题')
+    is_pinned: bool = Field(description='是否置顶')
     provider_id: int = Field(description='供应商 ID')
     model_id: str = Field(description='模型 ID')
     context_start_message_id: int | None = Field(default=None, description='上下文起始消息 ID')

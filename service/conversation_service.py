@@ -134,6 +134,7 @@ class AIConversationService:
             id=conversation.id,
             conversation_id=conversation.conversation_id,
             title=conversation.title,
+            is_pinned=conversation.pinned_time is not None,
             provider_id=conversation.provider_id,
             model_id=conversation.model_id,
             context_start_message_id=conversation.context_start_message_id,
