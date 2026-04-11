@@ -28,15 +28,15 @@ class AIMessageService:
     """AI 消息服务"""
 
     @staticmethod
-    def _get_message_row_index(*, message_rows: list[AIMessage], message_id: int) -> int:
+    def _get_message_row_index(*, message_rows: list[AIMessage], pk: int) -> int:
         """
         获取消息行索引
 
         :param message_rows: 消息行列表
-        :param message_id: 消息 ID
+        :param pk: 消息主键
         :return:
         """
-        message_row_index = next((index for index, row in enumerate(message_rows) if row.id == message_id), None)
+        message_row_index = next((index for index, row in enumerate(message_rows) if row.id == pk), None)
         if message_row_index is None:
             raise errors.NotFoundError(msg='消息不存在')
         return message_row_index
@@ -97,88 +97,13 @@ class AIMessageService:
         )
         return run_input, forwarded_props, agent, state
 
-    @staticmethod
-    async def clear(
-        *,
-        db: AsyncSession,
-        conversation_id: str,
-        user_id: int,
-    ) -> int:
-        """
-        清空对话消息
-
-        :param db: 数据库会话
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :return:
-        """
-        conversation = await ai_conversation_service.get_owned_conversation(
-            db=db,
-            conversation_id=conversation_id,
-            user_id=user_id,
-        )
-        await ai_conversation_dao.update(
-            db,
-            conversation.id,
-            build_update_ai_conversation_param(
-                conversation=conversation,
-                context_start_message_id=None,
-                context_cleared_time=None,
-            ),
-        )
-        return await ai_message_dao.delete(db, conversation_id)
-
-    async def update(
-        self,
-        *,
-        db: AsyncSession,
-        conversation_id: str,
-        user_id: int,
-        message_id: int,
-        obj: UpdateAIMessageParam,
-    ) -> int:
-        """
-        编辑保存指定消息
-
-        :param db: 数据库会话
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :param message_id: 消息 ID
-        :param obj: 更新参数
-        :return:
-        """
-        await ai_conversation_service.get_owned_conversation(
-            db=db,
-            conversation_id=conversation_id,
-            user_id=user_id,
-        )
-        message_rows = list(await ai_message_dao.get_all(db, conversation_id))
-        model_messages = (
-            ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
-        )
-        message_row_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
-        target_message = model_messages[message_row_index]
-        if not isinstance(target_message, ModelRequest):
-            raise errors.RequestError(msg='仅支持编辑用户消息')
-        if not target_message.parts or not isinstance(target_message.parts[0], UserPromptPart):
-            raise errors.RequestError(msg='仅支持编辑用户消息')
-        if not isinstance(target_message.parts[0].content, str):
-            raise errors.RequestError(msg='当前消息暂不支持直接编辑')
-
-        content = ' '.join(obj.content.split())
-        if not content:
-            raise errors.RequestError(msg='消息内容不能为空')
-        payload = deepcopy(message_rows[message_row_index].message)
-        payload['parts'][0]['content'] = content
-        return await ai_message_dao.update(db, message_id, {'message': payload})
-
     async def regenerate_from_user_message(
         self,
         *,
         db: AsyncSession,
         user_id: int,
         conversation_id: str,
-        message_id: int,
+        pk: int,
         obj: AIChatRegenerateParam,
         accept: str | None,
     ) -> StreamingResponse:
@@ -188,7 +113,7 @@ class AIMessageService:
         :param db: 数据库会话
         :param user_id: 用户 ID
         :param conversation_id: 对话 ID
-        :param message_id: 消息 ID
+        :param pk: 消息主键
         :param obj: 请求体
         :param accept: Accept 请求头
         :return:
@@ -199,7 +124,7 @@ class AIMessageService:
             conversation_id=conversation_id,
             obj=obj,
         )
-        target_index = self._get_message_row_index(message_rows=state.message_rows, message_id=message_id)
+        target_index = self._get_message_row_index(message_rows=state.message_rows, pk=pk)
         target_message = state.model_messages[target_index]
         if not isinstance(target_message, ModelRequest) or not is_user_prompt_message(message=target_message):
             raise errors.RequestError(msg='仅支持根据用户消息重生成')
@@ -264,7 +189,7 @@ class AIMessageService:
         db: AsyncSession,
         user_id: int,
         conversation_id: str,
-        message_id: int,
+        pk: int,
         obj: AIChatRegenerateParam,
         accept: str | None,
     ) -> StreamingResponse:
@@ -274,7 +199,7 @@ class AIMessageService:
         :param db: 数据库会话
         :param user_id: 用户 ID
         :param conversation_id: 对话 ID
-        :param message_id: 消息 ID
+        :param pk: 消息主键
         :param obj: 请求体
         :param accept: Accept 请求头
         :return:
@@ -285,7 +210,7 @@ class AIMessageService:
             conversation_id=conversation_id,
             obj=obj,
         )
-        target_index = self._get_message_row_index(message_rows=state.message_rows, message_id=message_id)
+        target_index = self._get_message_row_index(message_rows=state.message_rows, pk=pk)
         if not isinstance(state.model_messages[target_index], ModelResponse):
             raise errors.RequestError(msg='仅支持根据 AI 回复重生成')
         if target_index < state.context_start_index:
@@ -336,21 +261,96 @@ class AIMessageService:
             persistence=persistence,
         )
 
+    async def update(
+        self,
+        *,
+        db: AsyncSession,
+        user_id: int,
+        conversation_id: str,
+        pk: int,
+        obj: UpdateAIMessageParam,
+    ) -> int:
+        """
+        编辑保存指定消息
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param conversation_id: 对话 ID
+        :param pk: 消息主键
+        :param obj: 更新参数
+        :return:
+        """
+        await ai_conversation_service.get_owned_conversation(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        message_rows = list(await ai_message_dao.get_all(db, conversation_id))
+        model_messages = (
+            ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
+        )
+        message_row_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
+        target_message = model_messages[message_row_index]
+        if not isinstance(target_message, ModelRequest):
+            raise errors.RequestError(msg='仅支持编辑用户消息')
+        if not target_message.parts or not isinstance(target_message.parts[0], UserPromptPart):
+            raise errors.RequestError(msg='仅支持编辑用户消息')
+        if not isinstance(target_message.parts[0].content, str):
+            raise errors.RequestError(msg='当前消息暂不支持直接编辑')
+
+        content = ' '.join(obj.content.split())
+        if not content:
+            raise errors.RequestError(msg='消息内容不能为空')
+        payload = deepcopy(message_rows[message_row_index].message)
+        payload['parts'][0]['content'] = content
+        return await ai_message_dao.update(db, pk, {'message': payload})
+
+    @staticmethod
+    async def clear(
+        *,
+        db: AsyncSession,
+        user_id: int,
+        conversation_id: str,
+    ) -> int:
+        """
+        清空对话消息
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :param conversation_id: 对话 ID
+        :return:
+        """
+        conversation = await ai_conversation_service.get_owned_conversation(
+            db=db,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        await ai_conversation_dao.update(
+            db,
+            conversation.id,
+            build_update_ai_conversation_param(
+                conversation=conversation,
+                context_start_message_id=None,
+                context_cleared_time=None,
+            ),
+        )
+        return await ai_message_dao.delete(db, conversation_id)
+
     async def delete(
         self,
         *,
         db: AsyncSession,
-        conversation_id: str,
         user_id: int,
-        message_id: int,
+        conversation_id: str,
+        pk: int,
     ) -> int:
         """
         删除指定消息
 
         :param db: 数据库会话
-        :param conversation_id: 对话 ID
         :param user_id: 用户 ID
-        :param message_id: 消息 ID
+        :param conversation_id: 对话 ID
+        :param pk: 消息主键
         :return:
         """
         conversation = await ai_conversation_service.get_owned_conversation(
@@ -359,20 +359,20 @@ class AIMessageService:
             user_id=user_id,
         )
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
-        target_message_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
+        target_message_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
 
-        remaining_message_rows = [row for row in message_rows if row.id != message_id]
+        remaining_message_rows = [row for row in message_rows if row.id != pk]
         if not remaining_message_rows:
             await ai_message_dao.delete(db, conversation_id)
             return await ai_conversation_dao.delete(db, conversation_id, user_id)
 
-        await ai_message_dao.delete_message(db, message_id)
+        await ai_message_dao.delete_message(db, pk)
         for index, row in enumerate(remaining_message_rows):
             if row.message_index != index:
                 await ai_message_dao.update(db, row.id, {'message_index': index})
 
         context_start_message_id = conversation.context_start_message_id
-        if context_start_message_id == message_id:
+        if context_start_message_id == pk:
             previous_rows = message_rows[:target_message_index]
             context_start_message_id = previous_rows[-1].id if previous_rows else None
         return await ai_conversation_dao.update(

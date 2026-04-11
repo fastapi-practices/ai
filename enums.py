@@ -54,28 +54,6 @@ class AIChatGenerationType(StrEnum):
     image = 'image'
 
 
-class AIMessageRoleType(StrEnum):
-    """消息角色"""
-
-    user = 'user'
-    assistant = 'assistant'
-
-
-class AIMessageBlockType(StrEnum):
-    """消息内容块类型"""
-
-    text = 'text'
-    reasoning = 'reasoning'
-    file = 'file'
-
-
-class AIMessageType(StrEnum):
-    """消息类型"""
-
-    normal = 'normal'
-    error = 'error'
-
-
 class AIWebSearchType(StrEnum):
     """网络搜索模式"""
 
