@@ -14,13 +14,11 @@ class AIChatSchemaBase(SchemaBase):
     为兼容协议小驼峰返回，chat 接口（请求/响应）统一使用小驼峰参数
     """
 
-    model_config = ConfigDict(alias_generator=to_camel)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
 class AIChatMessageMetaSchemaBase(AIChatSchemaBase):
     """AI 对话消息扩展元信息"""
-
-    model_config = ConfigDict(extra='forbid')
 
     conversation_id: str | None = Field(default=None, description='对话 ID')
     persisted_message_id: int | None = Field(default=None, description='持久化消息 ID')

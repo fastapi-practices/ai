@@ -1,6 +1,7 @@
 from functools import partial
 
-from pydantic_ai import ModelRequest, UserPromptPart
+from pydantic_ai import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -9,6 +10,7 @@ from backend.common.log import log
 from backend.database.db import async_db_session
 from backend.plugin.ai.chat_runtime import (
     build_chat_agent,
+    is_user_prompt_message,
     persist_completion_result,
     prepare_run_input,
     stream_response,
@@ -16,8 +18,7 @@ from backend.plugin.ai.chat_runtime import (
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import ChatCompletionPersistence
-from backend.plugin.ai.protocol.ag_ui.input_adapter import deserialize_current_user_message
-from backend.plugin.ai.protocol.ag_ui.serializer import serialize_ag_ui_jsonable_python
+from backend.plugin.ai.protocol.ag_ui.request_decoder import decode_input_messages
 from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam
 from backend.plugin.ai.service.conversation_service import ai_conversation_service
@@ -60,6 +61,21 @@ class ChatService:
             raise errors.RequestError(msg='当前轮用户消息不能为空')
         return prompt
 
+    @staticmethod
+    def _get_latest_user_message(*, messages: list[ModelMessage]) -> ModelRequest:
+        """
+        获取当前轮最后一条用户消息
+
+        :param messages: 当前轮模型消息列表
+        :return:
+        """
+        if not messages:
+            raise errors.RequestError(msg='当前轮消息不能为空')
+        current_message = messages[-1]
+        if not isinstance(current_message, ModelRequest) or not is_user_prompt_message(message=current_message):
+            raise errors.RequestError(msg='最后一条消息必须是用户消息')
+        return current_message
+
     async def create_completion(
         self,
         *,
@@ -78,21 +94,20 @@ class ChatService:
         :return:
         """
         try:
-            current_message = deserialize_current_user_message(obj.message)
+            current_messages = decode_input_messages(messages=obj.messages)
         except Exception as e:
             log.warning(f'聊天消息加载失败: {e}')
-            if isinstance(e, errors.BaseExceptionError):
-                raise
             raise errors.RequestError(msg='聊天消息格式非法') from e
+        current_message = self._get_latest_user_message(messages=current_messages)
         prompt = self._extract_prompt(current_message=current_message)
         run_input = prepare_run_input(
-            thread_id=obj.thread_id,
+            conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
         )
         forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
         agent = await build_chat_agent(db=db, forwarded_props=forwarded_props)
         conversation_id = run_input.thread_id
-        payload_messages = serialize_ag_ui_jsonable_python([current_message])
+        payload_messages = to_jsonable_python(current_messages, by_alias=True)
         assert isinstance(payload_messages, list)
         # 使用独立事务先提交用户输入，避免流式阶段异常导致整段会话回滚
         async with async_db_session.begin() as session:

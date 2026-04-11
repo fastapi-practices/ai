@@ -1,11 +1,11 @@
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeAlias
 
-from ag_ui.core import BaseEvent, RunAgentInput, RunErrorEvent
+from ag_ui.core import RunAgentInput, RunErrorEvent
 from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.builtin_tools import AbstractBuiltinTool, CodeExecutionTool, ImageGenerationTool
 from pydantic_ai.capabilities import AbstractCapability, BuiltinTool, Thinking, Toolset
-from pydantic_ai.ui.ag_ui import AGUIAdapter
+from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -19,7 +19,7 @@ from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatCompletionPersistence
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
 from backend.plugin.ai.model import AIModel, AIProvider
-from backend.plugin.ai.protocol.ag_ui.serializer import serialize_ag_ui_json, serialize_ag_ui_jsonable_python
+from backend.plugin.ai.protocol.ag_ui.event_stream import build_streaming_response
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
@@ -117,7 +117,7 @@ async def build_agent_tools_capabilities(
 
 def prepare_run_input(
     *,
-    thread_id: str | None,
+    conversation_id: str | None,
     forwarded_props: AIChatForwardedPropsParam,
     default_conversation_id: str | None = None,
     expected_conversation_id: str | None = None,
@@ -125,13 +125,13 @@ def prepare_run_input(
     """
     解析并补全运行参数
 
-    :param thread_id: 对话 ID
+    :param conversation_id: 对话 ID
     :param forwarded_props: 聊天扩展参数
     :param default_conversation_id: 默认对话 ID
     :param expected_conversation_id: 期望对话 ID
     :return:
     """
-    conversation_id = thread_id or default_conversation_id or uuid4_str()
+    conversation_id = conversation_id or default_conversation_id or uuid4_str()
     run_input = RunAgentInput.model_validate({
         'thread_id': conversation_id,
         'run_id': uuid4_str(),
@@ -208,7 +208,7 @@ async def persist_completion_messages(
     if not messages:
         return
 
-    payload_messages = serialize_ag_ui_jsonable_python(messages)
+    payload_messages = to_jsonable_python(messages, by_alias=True)
     assert isinstance(payload_messages, list)
 
     insert_message_index = persistence.base_message_index
@@ -329,17 +329,6 @@ async def persist_completion_result(
     )
 
 
-async def ag_ui_event_encoder(stream: AsyncIterator[BaseEvent]) -> AsyncIterator[str]:
-    """
-    AG-UI 事件流编码器
-
-    :param stream: AG-UI 事件流
-    :return:
-    """
-    async for event in stream:
-        yield f'data: {serialize_ag_ui_json(event, exclude_none=True)}\n\n'
-
-
 def stream_response(
     *,
     db: AsyncSession,
@@ -364,52 +353,40 @@ def stream_response(
     :param persistence: 持久化上下文
     :return:
     """
-    adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
-    event_stream = adapter.run_stream(
-        deps=ChatAgentDeps(db=db, user_id=user_id),
+
+    async def handle_run_error(event: RunErrorEvent) -> None:
+        raw_error_message = event.message.strip() if event.message else ''
+        try:
+            error_message = raw_error_message or '模型请求失败，请稍后重试'
+            await persist_completion_messages(
+                db=db,
+                persistence=persistence,
+                messages=[
+                    ModelResponse(
+                        parts=[TextPart(content=f'模型请求失败：{error_message}')],
+                        model_name=persistence.forwarded_props.model_id,
+                        metadata={
+                            'is_error': True,
+                            'error_message': error_message,
+                        },
+                    )
+                ],
+            )
+        except Exception as e:
+            log.exception(f'持久化聊天失败消息异常: {e}')
+        else:
+            log_message = (
+                f'聊天运行失败，已写入对话记录 conversation_id={persistence.conversation_id}: {raw_error_message}'
+            )
+            log.warning(log_message)
+
+    return build_streaming_response(
+        db=db,
+        user_id=user_id,
+        agent=agent,
+        run_input=run_input,
+        accept=accept,
         message_history=message_history,
         on_complete=on_complete,
+        on_run_error=handle_run_error,
     )
-
-    async def stream_with_error_persistence() -> AsyncIterator[BaseEvent]:
-        error_persisted = False
-        async for event in event_stream:
-            if isinstance(event, RunErrorEvent) and not error_persisted:
-                error_persisted = True
-                raw_error_message = event.message.strip() if event.message else ''
-                try:
-                    error_message = raw_error_message or '模型请求失败，请稍后重试'
-                    await persist_completion_messages(
-                        db=db,
-                        persistence=persistence,
-                        messages=[
-                            ModelResponse(
-                                parts=[TextPart(content=f'模型请求失败：{error_message}')],
-                                model_name=persistence.forwarded_props.model_id,
-                                metadata={
-                                    'is_error': True,
-                                    'error_message': error_message,
-                                },
-                            )
-                        ],
-                    )
-                except Exception as e:
-                    log.exception(f'持久化聊天失败消息异常: {e}')
-                else:
-                    log_message = (
-                        '聊天运行失败，已写入对话记录 '
-                        f'conversation_id={persistence.conversation_id}: {raw_error_message}'
-                    )
-                    log.warning(log_message)
-            yield event
-
-    # 为了全量适配蛇形编码，而不是标准协议小驼峰，使用自定义 AG-UI 事件流编码器
-    event_stream_handler = adapter.build_event_stream()
-    response = StreamingResponse(
-        ag_ui_event_encoder(stream_with_error_persistence()),
-        headers=event_stream_handler.response_headers,
-        media_type=event_stream_handler.content_type,
-    )
-    response.headers['X-Accel-Buffering'] = 'no'
-    response.headers['Cache-Control'] = 'no-cache'
-    return response

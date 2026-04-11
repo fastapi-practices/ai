@@ -9,7 +9,7 @@ from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import ChatConversationState
 from backend.plugin.ai.model.conversation import AIConversation
-from backend.plugin.ai.protocol.ag_ui.output_adapter import serialize_messages_to_snapshot
+from backend.plugin.ai.protocol.ag_ui.snapshot_builder import serialize_messages_to_snapshot
 from backend.plugin.ai.schema.conversation import (
     GetAIConversationDetail,
     UpdateAIConversationPinnedParam,
@@ -119,7 +119,6 @@ class AIConversationService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        assert conversation is not None, '对话不存在'
         message_rows = await ai_message_dao.get_all(db, conversation.conversation_id)
         model_messages = (
             ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
@@ -240,7 +239,6 @@ class AIConversationService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        assert conversation is not None, '对话不存在'
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
         context_start_message_id = message_rows[-1].id if message_rows else None
         context_cleared_time = timezone.now() if message_rows else None

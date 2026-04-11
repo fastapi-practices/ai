@@ -81,7 +81,7 @@ class AIMessageService:
         :return:
         """
         run_input = prepare_run_input(
-            thread_id=obj.thread_id,
+            conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
             default_conversation_id=conversation_id,
             expected_conversation_id=conversation_id,
@@ -117,7 +117,6 @@ class AIMessageService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        assert conversation is not None, '对话不存在'
         await ai_conversation_dao.update(
             db,
             conversation.id,
@@ -359,7 +358,6 @@ class AIMessageService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        assert conversation is not None, '对话不存在'
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
         target_message_index = self._get_message_row_index(message_rows=message_rows, message_id=message_id)
 

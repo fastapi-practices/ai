@@ -1,10 +1,10 @@
 from typing import Any
 
-from pydantic import ConfigDict, Field
+from pydantic import Field
 
 from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIWebSearchType
-from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiUserMessageParam
-from backend.plugin.ai.protocol.chat import AIChatSchemaBase
+from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiInputMessageParam
+from backend.plugin.ai.protocol.schema import AIChatSchemaBase
 
 
 class AIChatModelSelectParam(AIChatSchemaBase):
@@ -63,22 +63,18 @@ class AIChatForwardedPropsParam(
 ):
     """对话扩展参数"""
 
-    model_config = ConfigDict(extra='forbid')
-
 
 class AIChatRequestBase(AIChatSchemaBase):
     """聊天请求基础参数"""
 
-    model_config = ConfigDict(extra='forbid')
-
-    thread_id: str | None = Field(default=None, description='对话 ID，不传则后端自动生成')
+    conversation_id: str | None = Field(default=None, description='对话 ID，不传则后端自动生成')
     forwarded_props: AIChatForwardedPropsParam = Field(description='聊天扩展参数')
 
 
 class AIChatCompletionParam(AIChatRequestBase):
     """聊天参数"""
 
-    message: AIChatAgUiUserMessageParam = Field(description='当前轮用户消息')
+    messages: list[AIChatAgUiInputMessageParam] = Field(min_length=1, description='当前轮输入消息列表')
 
 
 class AIChatRegenerateParam(AIChatRequestBase):
