@@ -54,9 +54,9 @@ class GetAIConversationListDetail(SchemaBase):
 
 
 class GetAIConversationDetail(SchemaBase):
-    """对话详情（为兼容协议小驼峰返回）"""
+    """对话详情（兼容协议小驼峰返回）"""
 
-    model_config = ConfigDict(from_attributes=True, alias_generator=to_camel)
+    model_config = ConfigDict(from_attributes=True, alias_generator=to_camel, populate_by_name=True)
 
     id: int = Field(description='ID')
     conversation_id: str = Field(description='对话 ID')
