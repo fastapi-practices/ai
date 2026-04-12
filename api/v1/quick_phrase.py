@@ -1,10 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Path, Query, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from backend.common.pagination import DependsPagination, PageData
 from backend.common.response.response_schema import ResponseModel, ResponseSchemaModel, response_base
 from backend.common.security.jwt import DependsJwtAuth
+from backend.common.security.permission import RequestPermission
+from backend.common.security.rbac import DependsRBAC
 from backend.database.db import CurrentSession, CurrentSessionTransaction
 from backend.plugin.ai.schema.quick_phrase import (
     CreateAIQuickPhraseParam,
@@ -51,7 +53,14 @@ async def get_ai_quick_phrases_paginated(
     return response_base.success(data=page_data)
 
 
-@router.post('', summary='创建快捷短语', dependencies=[DependsJwtAuth])
+@router.post(
+    '',
+    summary='创建快捷短语',
+    dependencies=[
+        Depends(RequestPermission('ai:quick-phrase:add')),
+        DependsRBAC,
+    ],
+)
 async def create_ai_quick_phrase(
     request: Request,
     db: CurrentSessionTransaction,
@@ -61,7 +70,14 @@ async def create_ai_quick_phrase(
     return response_base.success()
 
 
-@router.put('/{pk}', summary='更新快捷短语', dependencies=[DependsJwtAuth])
+@router.put(
+    '/{pk}',
+    summary='更新快捷短语',
+    dependencies=[
+        Depends(RequestPermission('ai:quick-phrase:edit')),
+        DependsRBAC,
+    ],
+)
 async def update_ai_quick_phrase(
     request: Request,
     db: CurrentSessionTransaction,
@@ -74,7 +90,14 @@ async def update_ai_quick_phrase(
     return response_base.fail()
 
 
-@router.delete('/{pk}', summary='删除快捷短语', dependencies=[DependsJwtAuth])
+@router.delete(
+    '/{pk}',
+    summary='删除快捷短语',
+    dependencies=[
+        Depends(RequestPermission('ai:quick-phrase:del')),
+        DependsRBAC,
+    ],
+)
 async def delete_ai_quick_phrase(
     request: Request,
     db: CurrentSessionTransaction,
