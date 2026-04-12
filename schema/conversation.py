@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pydantic import ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from backend.common.schema import SchemaBase
 from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiMessagesSnapshotDetail
@@ -39,7 +40,7 @@ class UpdateAIConversationPinnedParam(SchemaBase):
     is_pinned: bool = Field(description='是否置顶')
 
 
-class GetAIConversationListItem(SchemaBase):
+class GetAIConversationListDetail(SchemaBase):
     """对话列表项"""
 
     model_config = ConfigDict(from_attributes=True)
@@ -53,9 +54,9 @@ class GetAIConversationListItem(SchemaBase):
 
 
 class GetAIConversationDetail(SchemaBase):
-    """对话详情"""
+    """对话详情（为兼容协议小驼峰返回）"""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, alias_generator=to_camel)
 
     id: int = Field(description='ID')
     conversation_id: str = Field(description='对话 ID')

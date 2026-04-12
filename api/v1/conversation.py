@@ -8,7 +8,7 @@ from backend.common.security.jwt import DependsJwtAuth
 from backend.database.db import CurrentSession, CurrentSessionTransaction
 from backend.plugin.ai.schema.conversation import (
     GetAIConversationDetail,
-    GetAIConversationListItem,
+    GetAIConversationListDetail,
     UpdateAIConversationPinnedParam,
     UpdateAIConversationTitleParam,
 )
@@ -42,7 +42,7 @@ async def get_conversation(
 async def get_conversations_paginated(
     request: Request,
     db: CurrentSession,
-) -> ResponseSchemaModel[CursorPageData[GetAIConversationListItem]]:
+) -> ResponseSchemaModel[CursorPageData[GetAIConversationListDetail]]:
     data = await ai_conversation_service.get_list(db=db, user_id=request.user.id)
     return response_base.success(data=data)
 
