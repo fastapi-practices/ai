@@ -62,7 +62,7 @@ class AIModelService:
         :param provider_id: 供应商 ID
         :return:
         """
-        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable)
+        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable.value)
         return ai_models
 
     @staticmethod
