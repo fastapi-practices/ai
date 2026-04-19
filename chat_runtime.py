@@ -25,34 +25,13 @@ from backend.plugin.ai.schema.conversation import CreateAIConversationParam, Upd
 from backend.plugin.ai.service.mcp_service import mcp_service
 from backend.plugin.ai.tools.chat_builtin_toolset import build_chat_builtin_toolset
 from backend.plugin.ai.utils.chat_control import build_model_settings
-from backend.plugin.ai.utils.code_mode import build_code_mode_capability
+from backend.plugin.ai.utils.code_mode import build_code_mode_capability, should_enable_function_tools
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.mcp_capability import build_mcp_capability
 from backend.plugin.ai.utils.model_control import get_provider_model
 from backend.plugin.ai.utils.search_capability import build_search_capabilities
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
-
-
-def should_enable_function_tools(
-    *,
-    provider_type: int,
-    supports_tools: bool,
-    has_builtin_tools: bool,
-) -> bool:
-    """
-    判断是否允许函数工具
-
-    Google 当前不支持将 builtin tools 与 function tools 混用
-
-    :param provider_type: 供应商类型
-    :param supports_tools: 模型是否支持 function tools
-    :param has_builtin_tools: 当前能力列表是否包含 builtin tools
-    :return:
-    """
-    if not supports_tools:
-        return False
-    return not (AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools)
 
 
 def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
@@ -100,6 +79,8 @@ async def build_chat_agent_capabilities(
     *,
     db: AsyncSession,
     forwarded_props: AIChatForwardedPropsParam,
+    provider_type: int,
+    supports_tools: bool,
     supported_builtin_tools: frozenset[type[AbstractBuiltinTool]],
     supports_image_output: bool,
 ) -> list[AbstractCapability[ChatAgentDeps]]:
@@ -108,6 +89,8 @@ async def build_chat_agent_capabilities(
 
     :param db: 数据库会话
     :param forwarded_props: 聊天扩展参数
+    :param provider_type: 供应商类型
+    :param supports_tools: 模型是否支持 function tools
     :param supported_builtin_tools: 模型支持的内置工具类型
     :param supports_image_output: 模型是否支持图片输出
     :return:
@@ -142,7 +125,12 @@ async def build_chat_agent_capabilities(
             raise errors.RequestError(msg='当前模型暂不支持图片生成，请更换模型')
         capabilities.append(BuiltinTool(ImageGenerationTool()))
 
-    code_mode_capability = build_code_mode_capability(forwarded_props=forwarded_props)
+    code_mode_capability = build_code_mode_capability(
+        forwarded_props=forwarded_props,
+        provider_type=provider_type,
+        supports_tools=supports_tools,
+        has_builtin_tools=any(capability.get_builtin_tools() for capability in capabilities),
+    )
     if code_mode_capability is not None:
         capabilities.append(code_mode_capability)
 
@@ -168,6 +156,8 @@ async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwarded
     capabilities = await build_chat_agent_capabilities(
         db=db,
         forwarded_props=forwarded_props,
+        provider_type=provider.type,
+        supports_tools=model_instance.profile.supports_tools,
         supported_builtin_tools=model_instance.profile.supported_builtin_tools,
         supports_image_output=model_instance.profile.supports_image_output,
     )
