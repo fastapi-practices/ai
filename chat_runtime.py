@@ -29,11 +29,9 @@ from backend.plugin.ai.utils.code_mode import build_code_mode_capability
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.mcp_capability import build_mcp_capability
 from backend.plugin.ai.utils.model_control import get_provider_model
-from backend.plugin.ai.utils.search_capabilities import build_search_capabilities
+from backend.plugin.ai.utils.search_capability import build_search_capabilities
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
-
-
 
 
 def should_enable_function_tools(
@@ -54,9 +52,7 @@ def should_enable_function_tools(
     """
     if not supports_tools:
         return False
-    if AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools:
-        return False
-    return True
+    return not (AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools)
 
 
 def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
@@ -185,7 +181,9 @@ async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwarded
         deps_type=ChatAgentDeps,
         model=model_instance,
         output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
-        toolsets=[build_chat_builtin_toolset()] if forwarded_props.enable_builtin_tools and enable_function_tools else [],
+        toolsets=[build_chat_builtin_toolset()]
+        if forwarded_props.enable_builtin_tools and enable_function_tools
+        else [],
         capabilities=capabilities,
     )
 

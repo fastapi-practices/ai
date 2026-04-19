@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic_ai import AgentRunResult, ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai import AgentRunResult, ModelRequest, UserPromptPart
 from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
@@ -57,7 +57,6 @@ class ChatService:
         if not prompt and not has_binary_input:
             raise errors.RequestError(msg='当前轮用户消息不能为空')
         return prompt
-
 
     @staticmethod
     async def _persist_input_messages_before_stream(
