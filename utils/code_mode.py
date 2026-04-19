@@ -5,17 +5,7 @@ from backend.plugin.ai.dataclasses import ChatAgentDeps
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
-CODE_MODE_TOOL_NAMES: tuple[str, ...] = (
-    'get_current_time',
-    'list_my_quick_phrases',
-    'list_provider_models',
-    'duckduckgo_search',
-    'tavily_search',
-    'exa_search',
-    'exa_find_similar',
-    'exa_get_contents',
-    'exa_answer',
-)
+CODE_MODE_TOOL_NAMES: tuple[str, ...] = ()
 
 
 def should_enable_function_tools(

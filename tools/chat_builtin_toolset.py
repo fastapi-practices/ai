@@ -36,18 +36,4 @@ def build_chat_builtin_toolset() -> FunctionToolset[ChatAgentDeps]:
         phrases = await ai_quick_phrase_service.get_all(db=ctx.deps.db, user_id=ctx.deps.user_id)
         return [{'id': item.id, 'title': item.title, 'content': item.content} for item in phrases]
 
-    @toolset.tool
-    async def list_provider_models(ctx: RunContext[ChatAgentDeps], provider_id: int) -> list[str]:
-        """
-        获取指定供应商可用模型 ID
-
-        :param ctx: 运行上下文
-        :param provider_id: 供应商 ID
-        :return:
-        """
-        from backend.plugin.ai.crud.crud_model import ai_model_dao
-
-        models = await ai_model_dao.get_all(ctx.deps.db, provider_id=provider_id)
-        return [item.model_id for item in models if item.status]
-
     return toolset
