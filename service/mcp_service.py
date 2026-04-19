@@ -1,17 +1,11 @@
-import json
-
 from collections.abc import Sequence
 from typing import Any
 
-from pydantic_ai.capabilities import AbstractCapability, PrefixTools, Toolset
-from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.exception import errors
 from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_mcp import mcp_dao
-from backend.plugin.ai.dataclasses import ChatAgentDeps
-from backend.plugin.ai.enums import McpType
 from backend.plugin.ai.model import Mcp
 from backend.plugin.ai.schema.mcp import CreateMcpParam, UpdateMcpParam
 
@@ -44,54 +38,15 @@ class McpService:
         return await mcp_dao.get_all(db)
 
     @staticmethod
-    async def get_capabilities(*, db: AsyncSession, mcp_ids: list[int]) -> list[AbstractCapability[ChatAgentDeps]]:
+    async def get_by_ids(*, db: AsyncSession, mcp_ids: list[int]) -> Sequence[Mcp]:
         """
-        获取 MCP 能力
+        通过 ID 列表获取 MCP
 
         :param db: 数据库会话
         :param mcp_ids: MCP ID 列表
         :return:
         """
-        mcps = await mcp_dao.get_by_ids(db, mcp_ids)
-        capabilities: list[AbstractCapability[ChatAgentDeps]] = []
-        for mcp in mcps:
-            headers = json.loads(mcp.headers) if isinstance(mcp.headers, str) else (mcp.headers or {})
-            if not isinstance(headers, dict):
-                raise errors.RequestError(msg=f'MCP 请求头格式非法: {mcp.name}')
-            parsed_headers = {str(key): str(value) for key, value in headers.items()}
-            if mcp.type == McpType.stdio:
-                args = json.loads(mcp.args) if isinstance(mcp.args, str) else (mcp.args or [])
-                env = json.loads(mcp.env) if isinstance(mcp.env, str) else (mcp.env or {})
-                if not isinstance(args, list):
-                    raise errors.RequestError(msg=f'MCP 命令参数格式非法: {mcp.name}')
-                if not isinstance(env, dict):
-                    raise errors.RequestError(msg=f'MCP 环境变量格式非法: {mcp.name}')
-                toolset = MCPServerStdio(
-                    command=mcp.command,
-                    args=[str(arg) for arg in args],
-                    env={str(key): str(value) for key, value in env.items()},
-                    timeout=mcp.timeout,
-                )
-            elif mcp.type == McpType.sse:
-                if not mcp.url:
-                    raise errors.RequestError(msg=f'MCP 缺少 SSE URL: {mcp.name}')
-                toolset = MCPServerSSE(
-                    url=mcp.url,
-                    headers=parsed_headers,
-                    timeout=mcp.timeout,
-                    read_timeout=mcp.read_timeout,
-                )
-            else:
-                if not mcp.url:
-                    raise errors.RequestError(msg=f'MCP 缺少 Streamable HTTP URL: {mcp.name}')
-                toolset = MCPServerStreamableHTTP(
-                    url=mcp.url,
-                    headers=parsed_headers,
-                    timeout=mcp.timeout,
-                    read_timeout=mcp.read_timeout,
-                )
-            capabilities.append(PrefixTools(Toolset(toolset), prefix=f'mcp_{mcp.id}'))
-        return capabilities
+        return await mcp_dao.get_by_ids(db, mcp_ids)
 
     @staticmethod
     async def get_list(*, db: AsyncSession, name: str | None, type: int | None) -> dict[str, Any]:

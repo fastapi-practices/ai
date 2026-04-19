@@ -21,18 +21,42 @@ from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
 from backend.plugin.ai.model import AIModel, AIProvider
 from backend.plugin.ai.protocol.ag_ui.event_stream import build_streaming_response
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
-from backend.plugin.ai.schema.conversation import CreateAIConversationParam
+from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
-from backend.plugin.ai.tools.chat_builtin_tools import register_chat_builtin_tools
+from backend.plugin.ai.tools.chat_builtin_toolset import build_chat_builtin_toolset
 from backend.plugin.ai.utils.chat_control import build_model_settings
-from backend.plugin.ai.utils.conversation_control import (
-    build_update_ai_conversation_param,
-    normalize_generated_conversation_title,
-)
+from backend.plugin.ai.utils.code_mode import build_code_mode_capability
+from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
+from backend.plugin.ai.utils.mcp_capability import build_mcp_capability
 from backend.plugin.ai.utils.model_control import get_provider_model
-from backend.plugin.ai.utils.web_search import build_chat_search_tools
+from backend.plugin.ai.utils.search_capabilities import build_search_capabilities
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
+
+
+
+
+def should_enable_function_tools(
+    *,
+    provider_type: int,
+    supports_tools: bool,
+    has_builtin_tools: bool,
+) -> bool:
+    """
+    判断是否允许函数工具
+
+    Google 当前不支持将 builtin tools 与 function tools 混用
+
+    :param provider_type: 供应商类型
+    :param supports_tools: 模型是否支持 function tools
+    :param has_builtin_tools: 当前能力列表是否包含 builtin tools
+    :return:
+    """
+    if not supports_tools:
+        return False
+    if AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools:
+        return False
+    return True
 
 
 def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
@@ -76,33 +100,39 @@ async def get_available_provider_model(
     return provider, model
 
 
-async def build_agent_tools_capabilities(
+async def build_chat_agent_capabilities(
     *,
     db: AsyncSession,
     forwarded_props: AIChatForwardedPropsParam,
     supported_builtin_tools: frozenset[type[AbstractBuiltinTool]],
-) -> tuple[list[Any], list[AbstractCapability[ChatAgentDeps]]]:
+    supports_image_output: bool,
+) -> list[AbstractCapability[ChatAgentDeps]]:
     """
-    构建代理工具和能力
+    构建聊天代理能力
 
     :param db: 数据库会话
     :param forwarded_props: 聊天扩展参数
     :param supported_builtin_tools: 模型支持的内置工具类型
+    :param supports_image_output: 模型是否支持图片输出
     :return:
     """
     capabilities: list[AbstractCapability[ChatAgentDeps]] = []
-    if 'thinking' in forwarded_props.model_fields_set and forwarded_props.thinking is not None:
-        capabilities.append(Thinking(forwarded_props.thinking))
-    if forwarded_props.mcp_ids:
-        capabilities.extend(await mcp_service.get_capabilities(db=db, mcp_ids=forwarded_props.mcp_ids))
 
-    tools, search_capabilities = build_chat_search_tools(
-        web_search=forwarded_props.web_search,
-        supported_builtin_tools=supported_builtin_tools,
-        auto_web_fetch=forwarded_props.enable_builtin_tools
-        and forwarded_props.generation_type == AIChatGenerationType.text,
+    if forwarded_props.thinking is not None:
+        capabilities.append(Thinking(forwarded_props.thinking))
+
+    if forwarded_props.mcp_ids:
+        mcps = await mcp_service.get_by_ids(db=db, mcp_ids=forwarded_props.mcp_ids)
+        capabilities.extend(build_mcp_capability(mcp=mcp) for mcp in mcps)
+
+    capabilities.extend(
+        build_search_capabilities(
+            web_search=forwarded_props.web_search,
+            supported_builtin_tools=supported_builtin_tools,
+            auto_web_fetch=forwarded_props.enable_builtin_tools
+            and forwarded_props.generation_type == AIChatGenerationType.text,
+        )
     )
-    capabilities.extend(search_capabilities)
 
     if (
         forwarded_props.enable_builtin_tools
@@ -110,7 +140,54 @@ async def build_agent_tools_capabilities(
         and CodeExecutionTool in supported_builtin_tools
     ):
         capabilities.append(BuiltinTool(CodeExecutionTool()))
-    return tools, capabilities
+
+    if forwarded_props.generation_type == AIChatGenerationType.image:
+        if not supports_image_output:
+            raise errors.RequestError(msg='当前模型暂不支持图片生成，请更换模型')
+        capabilities.append(BuiltinTool(ImageGenerationTool()))
+
+    code_mode_capability = build_code_mode_capability(forwarded_props=forwarded_props)
+    if code_mode_capability is not None:
+        capabilities.append(code_mode_capability)
+
+    return capabilities
+
+
+async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwardedPropsParam) -> Agent:
+    """
+    构建聊天代理
+
+    :param db: 数据库会话
+    :param forwarded_props: 聊天扩展参数
+    :return:
+    """
+    provider, model = await get_available_provider_model(db=db, forwarded_props=forwarded_props)
+    model_instance = get_provider_model(
+        provider_type=provider.type,
+        model_name=model.model_id,
+        api_key=provider.api_key,
+        base_url=provider.api_host,
+        model_settings=build_model_settings(chat_metadata=forwarded_props, provider_type=provider.type),
+    )
+    capabilities = await build_chat_agent_capabilities(
+        db=db,
+        forwarded_props=forwarded_props,
+        supported_builtin_tools=model_instance.profile.supported_builtin_tools,
+        supports_image_output=model_instance.profile.supports_image_output,
+    )
+    enable_function_tools = should_enable_function_tools(
+        provider_type=provider.type,
+        supports_tools=model_instance.profile.supports_tools,
+        has_builtin_tools=any(capability.get_builtin_tools() for capability in capabilities),
+    )
+    return Agent(
+        name='fba-chat',
+        deps_type=ChatAgentDeps,
+        model=model_instance,
+        output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
+        toolsets=[build_chat_builtin_toolset()] if forwarded_props.enable_builtin_tools and enable_function_tools else [],
+        capabilities=capabilities,
+    )
 
 
 def prepare_run_input(
@@ -147,69 +224,18 @@ def prepare_run_input(
     return run_input
 
 
-async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwardedPropsParam) -> Agent:
-    """
-    构建聊天代理
-
-    :param db: 数据库会话
-    :param forwarded_props: 聊天扩展参数
-    :return:
-    """
-    provider, model = await get_available_provider_model(db=db, forwarded_props=forwarded_props)
-
-    model_instance = get_provider_model(
-        provider_type=provider.type,
-        model_name=model.model_id,
-        api_key=provider.api_key,
-        base_url=provider.api_host,
-        model_settings=build_model_settings(chat_metadata=forwarded_props, provider_type=provider.type),
-    )
-    supported_builtin_tools = model_instance.profile.supported_builtin_tools
-    tools, capabilities = await build_agent_tools_capabilities(
-        db=db,
-        forwarded_props=forwarded_props,
-        supported_builtin_tools=supported_builtin_tools,
-    )
-    if forwarded_props.generation_type == AIChatGenerationType.image:
-        if not model_instance.profile.supports_image_output:
-            raise errors.RequestError(msg='当前模型暂不支持图片生成，请更换模型')
-        capabilities.append(BuiltinTool(ImageGenerationTool()))
-
-    output_type: Any = [BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str
-    agent = Agent(
-        name='fba_chat',
-        deps_type=ChatAgentDeps,
-        model=model_instance,
-        output_type=output_type,
-        tools=tools,
-        capabilities=capabilities,
-    )
-    if forwarded_props.enable_builtin_tools:
-        register_chat_builtin_tools(agent)
-    return agent
-
-
-async def persist_completion_messages(
+async def sync_persistence_conversation(
     *,
     db: AsyncSession,
     persistence: ChatCompletionPersistence,
-    messages: list[ChatModelMessage],
 ) -> None:
     """
-    持久化模型输出消息
+    同步持久化对话
 
     :param db: 数据库会话
     :param persistence: 持久化上下文
-    :param messages: 待持久化消息
     :return:
     """
-    if not messages:
-        return
-
-    payload_messages = to_jsonable_python(messages, by_alias=True)
-    assert isinstance(payload_messages, list)
-
-    insert_message_index = persistence.base_message_index
     current_conversation = persistence.conversation or await ai_conversation_dao.get_by_conversation_id(
         db, persistence.conversation_id
     )
@@ -218,11 +244,15 @@ async def persist_completion_messages(
         await ai_conversation_dao.update(
             db,
             current_conversation.id,
-            build_update_ai_conversation_param(
-                conversation=current_conversation,
+            UpdateAIConversationParam(
+                conversation_id=current_conversation.conversation_id,
                 title=normalized_title,
                 provider_id=persistence.forwarded_props.provider_id,
                 model_id=persistence.forwarded_props.model_id,
+                user_id=current_conversation.user_id,
+                pinned_time=current_conversation.pinned_time,
+                context_start_message_id=current_conversation.context_start_message_id,
+                context_cleared_time=current_conversation.context_cleared_time,
             ),
         )
     else:
@@ -237,6 +267,22 @@ async def persist_completion_messages(
             ),
         )
 
+
+async def persist_message_payloads(
+    *,
+    db: AsyncSession,
+    persistence: ChatCompletionPersistence,
+    payload_messages: list[dict[str, Any]],
+) -> None:
+    """
+    持久化消息载荷
+
+    :param db: 数据库会话
+    :param persistence: 持久化上下文
+    :param payload_messages: 待落库消息载荷
+    :return:
+    """
+    insert_message_index = persistence.base_message_index
     if (
         persistence.replace_message_row_ids is not None
         and persistence.replace_start_message_index is not None
@@ -306,24 +352,30 @@ async def persist_completion_messages(
     )
 
 
-async def persist_completion_result(
-    result: AgentRunResult[Any],
+async def persist_completion_messages(
     *,
     db: AsyncSession,
     persistence: ChatCompletionPersistence,
+    messages: list[ChatModelMessage],
 ) -> None:
     """
-    持久化成功完成的聊天结果
+    持久化模型输出消息
 
-    :param result: 运行结果
     :param db: 数据库会话
     :param persistence: 持久化上下文
+    :param messages: 待持久化消息
     :return:
     """
-    await persist_completion_messages(
+    if not messages:
+        return
+
+    payload_messages = to_jsonable_python(messages, by_alias=True)
+    assert isinstance(payload_messages, list)
+    await sync_persistence_conversation(db=db, persistence=persistence)
+    await persist_message_payloads(
         db=db,
         persistence=persistence,
-        messages=result.all_messages()[persistence.result_offset :],
+        payload_messages=payload_messages,
     )
 
 
@@ -339,7 +391,7 @@ def stream_response(
     persistence: ChatCompletionPersistence,
 ) -> StreamingResponse:
     """
-    运行聊天代理并返回流式响应
+    流式响应
 
     :param db: 数据库会话
     :param user_id: 用户 ID
@@ -353,7 +405,7 @@ def stream_response(
     """
 
     async def handle_run_error(event: RunErrorEvent) -> None:
-        raw_error_message = event.message.strip() if event.message else ''
+        raw_error_message = ' '.join(event.message.split()) if event.message else ''
         try:
             error_message = raw_error_message or '模型请求失败，请稍后重试'
             await persist_completion_messages(

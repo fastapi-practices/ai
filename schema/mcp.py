@@ -18,7 +18,7 @@ class McpSchemaBase(SchemaBase):
     headers: dict[str, Any] | None = Field(None, description='请求 MCP 端点时的请求头')
     args: list[str] | None = Field(None, description='MCP 命令参数')
     env: dict[str, Any] | None = Field(None, description='MCP 环境变量')
-    timeout: float | None = Field(5, description='客户端初始化超时时间（秒）')
+    timeout: float = Field(5, description='客户端初始化超时时间（秒）')
     read_timeout: float | None = Field(5 * 60, description='等待新消息的最长时间（秒）')
 
 

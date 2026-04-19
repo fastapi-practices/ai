@@ -23,7 +23,7 @@ from backend.plugin.ai.schema.provider import (
     UpdateAIProviderParam,
 )
 from backend.plugin.ai.utils.api_key_ops import mask_api_key
-from backend.plugin.ai.utils.provider_url import normalize_provider_api_host
+from backend.plugin.ai.utils.provider_control import normalize_provider_api_host
 from backend.utils.timezone import timezone
 
 

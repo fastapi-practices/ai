@@ -1,1 +1,2 @@
-pydantic-ai-slim[openai,google,anthropic,xai,openrouter,mcp,retries,tavily,duckduckgo,ag-ui,exa]>=1.80.0
+pydantic-ai-slim[openai,google,anthropic,xai,openrouter,mcp,retries,tavily,duckduckgo,ag-ui,exa]>=1.84.1
+pydantic-ai-harness[code-mode]>=0.1.1,<0.2.0

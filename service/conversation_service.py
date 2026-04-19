@@ -12,13 +12,11 @@ from backend.plugin.ai.model.conversation import AIConversation
 from backend.plugin.ai.protocol.ag_ui.snapshot_builder import serialize_messages_to_snapshot
 from backend.plugin.ai.schema.conversation import (
     GetAIConversationDetail,
+    UpdateAIConversationParam,
     UpdateAIConversationPinnedParam,
     UpdateAIConversationTitleParam,
 )
-from backend.plugin.ai.utils.conversation_control import (
-    build_update_ai_conversation_param,
-    normalize_conversation_title,
-)
+from backend.plugin.ai.utils.conversation_control import normalize_conversation_title
 from backend.utils.timezone import timezone
 
 
@@ -245,8 +243,13 @@ class AIConversationService:
         return await ai_conversation_dao.update(
             db,
             conversation.id,
-            build_update_ai_conversation_param(
-                conversation=conversation,
+            UpdateAIConversationParam(
+                conversation_id=conversation.conversation_id,
+                title=conversation.title,
+                provider_id=conversation.provider_id,
+                model_id=conversation.model_id,
+                user_id=conversation.user_id,
+                pinned_time=conversation.pinned_time,
                 context_start_message_id=context_start_message_id,
                 context_cleared_time=context_cleared_time,
             ),

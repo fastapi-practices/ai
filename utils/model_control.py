@@ -21,7 +21,7 @@ from xai_sdk import AsyncClient
 from backend.common.exception import errors
 from backend.core.conf import settings
 from backend.plugin.ai.enums import AIProviderType
-from backend.plugin.ai.utils.provider_url import normalize_provider_api_host
+from backend.plugin.ai.utils.provider_control import normalize_provider_api_host
 
 ProviderModel = OpenAIChatModel | OpenAIResponsesModel | AnthropicModel | GoogleModel | XaiModel | OpenRouterModel
 

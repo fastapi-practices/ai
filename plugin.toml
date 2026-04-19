@@ -1,16 +1,13 @@
 [plugin]
-summary = 'AI'
-version = '0.1.1'
-description = '为系统提供 AI 赋能'
-author = 'wu-clan'
-tags = ['ai', 'mcp', 'agent']
-database = ['mysql', 'postgresql']
+summary = "AI"
+version = "0.1.1"
+description = "为系统提供 AI 赋能"
+author = "wu-clan"
+tags = ["agent", "ai", "mcp"]
+database = ["mysql", "postgresql"]
 
 [app]
-router = ['v1']
+router = ["v1"]
 
 [settings]
 AI_HTTP_MAX_RETRIES = 5
-AI_CHAT_MAX_RETRIES = 5
-AI_EXA_NUM_RESULTS = 5
-AI_EXA_MAX_CHARACTERS = 4000

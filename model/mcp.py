@@ -19,5 +19,5 @@ class Mcp(Base):
     headers: Mapped[str | None] = mapped_column(sa.JSON(), default=None, comment='请求 MCP 端点时的请求头')
     args: Mapped[str | None] = mapped_column(sa.JSON(), default=None, comment='MCP 命令参数')
     env: Mapped[str | None] = mapped_column(sa.JSON(), default=None, comment='MCP 环境变量')
-    timeout: Mapped[float | None] = mapped_column(default=5, comment='客户端初始化超时时间（秒）')
+    timeout: Mapped[float] = mapped_column(default=5, comment='客户端初始化超时时间（秒）')
     read_timeout: Mapped[float | None] = mapped_column(default=5 * 60, comment='等待新消息的最长时间（秒）')
