@@ -1,6 +1,6 @@
 [plugin]
 summary = "AI"
-version = "0.1.2"
+version = "0.1.3"
 description = "为系统提供 AI 赋能"
 author = "wu-clan"
 tags = ["agent", "ai", "mcp"]
@@ -10,4 +10,6 @@ database = ["mysql", "postgresql"]
 router = ["v1"]
 
 [settings]
+AI_CODE_MODE_TOOLS = []
 AI_HTTP_MAX_RETRIES = 5
+AI_MCP_MAX_RETRIES = 1

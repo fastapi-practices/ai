@@ -57,6 +57,7 @@ class AIChatGenerationType(StrEnum):
 class AIWebSearchType(StrEnum):
     """网络搜索模式"""
 
+    off = 'off'
     builtin = 'builtin'
     exa = 'exa'
     tavily = 'tavily'

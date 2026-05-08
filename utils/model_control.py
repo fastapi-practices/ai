@@ -1,3 +1,4 @@
+from inspect import isawaitable
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,7 +24,7 @@ from backend.core.conf import settings
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.utils.provider_control import normalize_provider_api_host
 
-ProviderModel = OpenAIChatModel | OpenAIResponsesModel | AnthropicModel | GoogleModel | XaiModel | OpenRouterModel
+_PROVIDER_MODEL_CLIENTS: dict[int, object] = {}
 
 
 def _build_retry_http_client() -> httpx.AsyncClient:
@@ -56,7 +57,7 @@ def get_provider_model(
     api_key: str,
     base_url: str,
     model_settings: ModelSettings,
-) -> ProviderModel:
+) -> OpenAIChatModel | OpenAIResponsesModel | OpenRouterModel | AnthropicModel | GoogleModel | XaiModel:
     """
     获取供应商模型
 
@@ -73,19 +74,23 @@ def get_provider_model(
 
     if provider_type == AIProviderType.openai:
         openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=retry_http_client)
-        return OpenAIChatModel(
+        model = OpenAIChatModel(
             model_name,
             provider=OpenAIProvider(openai_client=openai_client),
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
+        return model
 
     if provider_type == AIProviderType.openai_responses:
         openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key, http_client=retry_http_client)
-        return OpenAIResponsesModel(
+        model = OpenAIResponsesModel(
             model_name,
             provider=OpenAIProvider(openai_client=openai_client),
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
+        return model
 
     if provider_type == AIProviderType.openrouter:
         provider = (
@@ -95,38 +100,66 @@ def get_provider_model(
             if base_url
             else OpenRouterProvider(api_key=api_key, http_client=retry_http_client)
         )
-        return OpenRouterModel(
+        model = OpenRouterModel(
             model_name,
             provider=provider,
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
+        return model
 
     if provider_type == AIProviderType.anthropic:
-        return AnthropicModel(
+        model = AnthropicModel(
             model_name,
             provider=AnthropicProvider(base_url=base_url, api_key=api_key, http_client=retry_http_client),
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
+        return model
 
     if provider_type == AIProviderType.google:
-        return GoogleModel(
+        model = GoogleModel(
             model_name,
             provider=GoogleProvider(base_url=base_url, api_key=api_key, http_client=retry_http_client),
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
+        return model
 
     if provider_type == AIProviderType.xai:
         parsed_url = urlsplit(base_url)
-        return XaiModel(
+        xai_client = AsyncClient(
+            api_key=api_key,
+            api_host=parsed_url.netloc,
+            use_insecure_channel=parsed_url.scheme == 'http',
+        )
+        model = XaiModel(
             model_name,
-            provider=XaiProvider(
-                xai_client=AsyncClient(
-                    api_key=api_key,
-                    api_host=parsed_url.netloc,
-                    use_insecure_channel=parsed_url.scheme == 'http',
-                )
-            ),
+            provider=XaiProvider(xai_client=xai_client),
             settings=model_settings,
         )
+        _PROVIDER_MODEL_CLIENTS[id(model)] = xai_client
+        return model
 
     raise errors.NotFoundError(msg=f'当前不支持此供应商: {provider_type}')
+
+
+async def close_provider_model(model: object) -> None:
+    """
+    关闭模型关联的供应商客户端
+
+    :param model: 模型实例
+    :return:
+    """
+    client = _PROVIDER_MODEL_CLIENTS.pop(id(model), None)
+    if client is None:
+        return
+    if isinstance(client, httpx.AsyncClient):
+        if not client.is_closed:
+            await client.aclose()
+        return
+    close = getattr(client, 'close', None)
+    if close is not None:
+        close_result = close()
+        if isawaitable(close_result):
+            await close_result

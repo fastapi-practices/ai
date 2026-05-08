@@ -1,11 +1,11 @@
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai_harness import CodeMode
 
+from backend.common.exception import errors
+from backend.core.conf import settings
 from backend.plugin.ai.dataclasses import ChatAgentDeps
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
-
-CODE_MODE_TOOL_NAMES: tuple[str, ...] = ()
 
 
 def should_enable_function_tools(
@@ -29,34 +29,6 @@ def should_enable_function_tools(
     return not (AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools)
 
 
-def should_enable_code_mode(
-    *,
-    forwarded_props: AIChatForwardedPropsParam,
-    provider_type: int,
-    supports_tools: bool,
-    has_builtin_tools: bool,
-) -> bool:
-    """
-    判断当前会话是否允许启用 CodeMode
-
-    CodeMode 会向模型暴露 `run_code` 函数工具，因此需要同时满足文本生成与模型支持工具调用
-    另外 Google 当前不支持将 builtin tools 与 function tools 混用，因此需要在存在 builtin tools 时禁用
-
-    :param forwarded_props: 聊天扩展参数
-    :param provider_type: 供应商类型
-    :param supports_tools: 模型是否支持 function tools
-    :param has_builtin_tools: 当前能力列表是否包含 builtin tools
-    :return:
-    """
-    if forwarded_props.generation_type != AIChatGenerationType.text:
-        return False
-    return should_enable_function_tools(
-        provider_type=provider_type,
-        supports_tools=supports_tools,
-        has_builtin_tools=has_builtin_tools,
-    )
-
-
 def build_code_mode_capability(
     *,
     forwarded_props: AIChatForwardedPropsParam,
@@ -73,11 +45,23 @@ def build_code_mode_capability(
     :param has_builtin_tools: 当前能力列表是否包含 builtin tools
     :return:
     """
-    if not should_enable_code_mode(
-        forwarded_props=forwarded_props,
+    if forwarded_props.generation_type != AIChatGenerationType.text:
+        return None
+    if not should_enable_function_tools(
         provider_type=provider_type,
         supports_tools=supports_tools,
         has_builtin_tools=has_builtin_tools,
     ):
         return None
-    return CodeMode(tools=list(CODE_MODE_TOOL_NAMES))
+    if not isinstance(settings.AI_CODE_MODE_TOOLS, list) or any(
+        not isinstance(tool, str) for tool in settings.AI_CODE_MODE_TOOLS
+    ):
+        raise errors.ServerError(msg='AI_CODE_MODE_TOOLS 必须配置为字符串列表')
+    code_mode_tools = [tool.strip() for tool in settings.AI_CODE_MODE_TOOLS if tool.strip()]
+    if not code_mode_tools:
+        return None
+    if 'all' in code_mode_tools:
+        if len(code_mode_tools) > 1:
+            raise errors.ServerError(msg='AI_CODE_MODE_TOOLS 配置 all 时不能混用其他工具名称')
+        return CodeMode(tools='all')
+    return CodeMode(tools=code_mode_tools)

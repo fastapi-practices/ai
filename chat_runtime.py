@@ -28,10 +28,29 @@ from backend.plugin.ai.utils.chat_control import build_model_settings
 from backend.plugin.ai.utils.code_mode import build_code_mode_capability, should_enable_function_tools
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.mcp_capability import build_mcp_capability
-from backend.plugin.ai.utils.model_control import get_provider_model
+from backend.plugin.ai.utils.model_control import close_provider_model, get_provider_model
 from backend.plugin.ai.utils.search_capability import build_search_capabilities
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
+IMAGE_GENERATION_FIELD_MAP: dict[str, str] = {
+    'image_action': 'action',
+    'image_background': 'background',
+    'image_input_fidelity': 'input_fidelity',
+    'image_moderation': 'moderation',
+    'image_model': 'model',
+    'image_output_compression': 'output_compression',
+    'image_output_format': 'output_format',
+    'image_partial_images': 'partial_images',
+    'image_quality': 'quality',
+    'image_size': 'size',
+    'image_aspect_ratio': 'aspect_ratio',
+}
+GOOGLE_IMAGE_GENERATION_FIELDS = {
+    'image_output_compression',
+    'image_output_format',
+    'image_size',
+    'image_aspect_ratio',
+}
 
 
 def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
@@ -72,6 +91,8 @@ async def get_available_provider_model(
         raise errors.NotFoundError(msg='供应商模型不存在')
     if not model.status:
         raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
+    if provider.type == AIProviderType.openrouter and '/' not in model.model_id:
+        raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
     return provider, model
 
 
@@ -108,7 +129,8 @@ async def build_chat_agent_capabilities(
         build_search_capabilities(
             web_search=forwarded_props.web_search,
             supported_builtin_tools=supported_builtin_tools,
-            auto_web_fetch=forwarded_props.enable_builtin_tools
+            auto_web_fetch=AIProviderType(provider_type) != AIProviderType.google
+            and forwarded_props.enable_builtin_tools
             and forwarded_props.generation_type == AIChatGenerationType.text,
         )
     )
@@ -123,17 +145,37 @@ async def build_chat_agent_capabilities(
     if forwarded_props.generation_type == AIChatGenerationType.image:
         if not supports_image_output:
             raise errors.RequestError(msg='当前模型暂不支持图片生成，请更换模型')
-        capabilities.append(BuiltinTool(ImageGenerationTool()))
+        image_fields = (
+            GOOGLE_IMAGE_GENERATION_FIELDS
+            if AIProviderType(provider_type) == AIProviderType.google
+            else set(IMAGE_GENERATION_FIELD_MAP)
+        )
+        image_settings = forwarded_props.model_dump(include=image_fields, exclude_unset=True, exclude_none=True)
+        image_tool_settings = {IMAGE_GENERATION_FIELD_MAP[field]: value for field, value in image_settings.items()}
+        capabilities.append(BuiltinTool(ImageGenerationTool(**image_tool_settings)))
 
-    code_mode_capability = build_code_mode_capability(
-        forwarded_props=forwarded_props,
-        provider_type=provider_type,
-        supports_tools=supports_tools,
-        has_builtin_tools=any(capability.get_builtin_tools() for capability in capabilities),
+    has_builtin_tools = any(capability.get_builtin_tools() for capability in capabilities)
+    has_function_toolsets = any(capability.get_toolset() is not None for capability in capabilities)
+    has_function_tool_sources = has_function_toolsets or (
+        forwarded_props.enable_builtin_tools
+        and should_enable_function_tools(
+            provider_type=provider_type,
+            supports_tools=supports_tools,
+            has_builtin_tools=has_builtin_tools,
+        )
     )
-    if code_mode_capability is not None:
-        capabilities.append(code_mode_capability)
+    if has_function_tool_sources:
+        code_mode_capability = build_code_mode_capability(
+            forwarded_props=forwarded_props,
+            provider_type=provider_type,
+            supports_tools=supports_tools,
+            has_builtin_tools=has_builtin_tools,
+        )
+        if code_mode_capability is not None:
+            capabilities.append(code_mode_capability)
 
+    if AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools and has_function_toolsets:
+        raise errors.RequestError(msg='Google 模型不支持同时使用内置工具和函数工具，请关闭 MCP 和本地搜索/关闭内置工具')
     return capabilities
 
 
@@ -153,29 +195,37 @@ async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwarded
         base_url=provider.api_host,
         model_settings=build_model_settings(chat_metadata=forwarded_props, provider_type=provider.type),
     )
-    capabilities = await build_chat_agent_capabilities(
-        db=db,
-        forwarded_props=forwarded_props,
-        provider_type=provider.type,
-        supports_tools=model_instance.profile.supports_tools,
-        supported_builtin_tools=model_instance.profile.supported_builtin_tools,
-        supports_image_output=model_instance.profile.supports_image_output,
-    )
-    enable_function_tools = should_enable_function_tools(
-        provider_type=provider.type,
-        supports_tools=model_instance.profile.supports_tools,
-        has_builtin_tools=any(capability.get_builtin_tools() for capability in capabilities),
-    )
-    return Agent(
-        name='fba-chat',
-        deps_type=ChatAgentDeps,
-        model=model_instance,
-        output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
-        toolsets=[build_chat_builtin_toolset()]
-        if forwarded_props.enable_builtin_tools and enable_function_tools
-        else [],
-        capabilities=capabilities,
-    )
+    try:
+        profile = model_instance.profile
+        capabilities = await build_chat_agent_capabilities(
+            db=db,
+            forwarded_props=forwarded_props,
+            provider_type=provider.type,
+            supports_tools=profile.supports_tools,
+            supported_builtin_tools=profile.supported_builtin_tools,
+            supports_image_output=profile.supports_image_output,
+        )
+        enable_function_tools = should_enable_function_tools(
+            provider_type=provider.type,
+            supports_tools=profile.supports_tools,
+            has_builtin_tools=any(capability.get_builtin_tools() for capability in capabilities),
+        )
+        return Agent(
+            name='fba-chat',
+            deps_type=ChatAgentDeps,
+            model=model_instance,
+            output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
+            toolsets=[build_chat_builtin_toolset()]
+            if forwarded_props.enable_builtin_tools and enable_function_tools
+            else [],
+            capabilities=capabilities,
+        )
+    except ValueError as e:
+        await close_provider_model(model_instance)
+        raise errors.RequestError(msg=f'模型配置无效: {e}') from e
+    except Exception:
+        await close_provider_model(model_instance)
+        raise
 
 
 def prepare_run_input(
@@ -418,6 +468,12 @@ def stream_response(
             )
             log.warning(log_message)
 
+    async def handle_finish() -> None:
+        try:
+            await close_provider_model(agent.model)
+        except Exception as e:
+            log.warning(f'关闭模型供应商客户端失败: {e}')
+
     return build_streaming_response(
         db=db,
         user_id=user_id,
@@ -427,4 +483,5 @@ def stream_response(
         message_history=message_history,
         on_complete=on_complete,
         on_run_error=handle_run_error,
+        on_finish=handle_finish,
     )

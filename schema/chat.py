@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -17,10 +17,7 @@ class AIChatModelSelectParam(AIChatSchemaBase):
 class AIChatThinkingParam(AIChatSchemaBase):
     """聊天模型思考参数"""
 
-    thinking: bool | AIChatThinkingType | None = Field(
-        default=None,
-        description='模型思考模式，支持 true、false 或 minimal/low/medium/high/xhigh',
-    )
+    thinking: bool | AIChatThinkingType | None = Field(default=None, description='模型思考模式')
 
 
 class AIChatRuntimeParam(AIChatSchemaBase):
@@ -28,7 +25,7 @@ class AIChatRuntimeParam(AIChatSchemaBase):
 
     enable_builtin_tools: bool = Field(default=True, description='是否启用项目内置工具')
     mcp_ids: list[int] | None = Field(default=None, description='启用的 MCP ID 列表')
-    web_search: AIWebSearchType = Field(default=AIWebSearchType.builtin, description='网络搜索模式')
+    web_search: AIWebSearchType = Field(default=AIWebSearchType.off, description='网络搜索模式')
 
 
 class AIChatModelSettingsParam(AIChatSchemaBase):
@@ -48,6 +45,30 @@ class AIChatModelSettingsParam(AIChatSchemaBase):
     parallel_tool_calls: bool | None = Field(default=None, description='是否允许并行工具调用')
 
 
+class AIChatImageGenerationParam(AIChatSchemaBase):
+    """聊天图片生成参数"""
+
+    image_action: Literal['generate', 'edit', 'auto'] | None = Field(default=None, description='图片生成动作')
+    image_background: Literal['transparent', 'opaque', 'auto'] | None = Field(
+        default=None,
+        description='图片背景类型',
+    )
+    image_input_fidelity: Literal['high', 'low'] | None = Field(default=None, description='图片编辑输入保真度')
+    image_moderation: Literal['auto', 'low'] | None = Field(default=None, description='图片生成审核强度')
+    image_model: str | None = Field(default=None, description='图片生成底层模型')
+    image_output_compression: int | None = Field(default=None, ge=0, le=100, description='图片输出压缩质量')
+    image_output_format: Literal['png', 'webp', 'jpeg'] | None = Field(default=None, description='图片输出格式')
+    image_partial_images: int | None = Field(default=None, ge=0, le=3, description='流式图片中间结果数量')
+    image_quality: Literal['low', 'medium', 'high', 'auto'] | None = Field(default=None, description='图片生成质量')
+    image_size: Literal['auto', '1024x1024', '1024x1536', '1536x1024', '512', '1K', '2K', '4K'] | None = Field(
+        default=None,
+        description='图片尺寸',
+    )
+    image_aspect_ratio: Literal['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'] | None = Field(
+        default=None, description='图片宽高比'
+    )
+
+
 class AIChatOutputParam(AIChatSchemaBase):
     """聊天输出控制参数"""
 
@@ -59,6 +80,7 @@ class AIChatForwardedPropsParam(
     AIChatThinkingParam,
     AIChatRuntimeParam,
     AIChatModelSettingsParam,
+    AIChatImageGenerationParam,
     AIChatOutputParam,
 ):
     """对话扩展参数"""

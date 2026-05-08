@@ -33,6 +33,7 @@ def build_streaming_response(
     message_history: list[ChatModelMessage],
     on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]],
     on_run_error: Callable[[RunErrorEvent], Awaitable[None]],
+    on_finish: Callable[[], Awaitable[None]] | None = None,
 ) -> StreamingResponse:
     """
     运行聊天代理并返回流式响应
@@ -45,6 +46,7 @@ def build_streaming_response(
     :param message_history: 消息历史
     :param on_complete: 完成回调
     :param on_run_error: 运行失败回调
+    :param on_finish: 流结束回调
     :return:
     """
     adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
@@ -56,11 +58,20 @@ def build_streaming_response(
 
     async def stream_with_error_callback() -> AsyncIterator[BaseEvent]:
         error_handled = False
-        async for event in event_stream:
-            if isinstance(event, RunErrorEvent) and not error_handled:
-                error_handled = True
-                await on_run_error(event)
-            yield event
+        try:
+            async for event in event_stream:
+                if isinstance(event, RunErrorEvent) and not error_handled:
+                    error_handled = True
+                    await on_run_error(event)
+                yield event
+        finally:
+            try:
+                aclose = getattr(event_stream, 'aclose', None)
+                if aclose is not None:
+                    await aclose()
+            finally:
+                if on_finish:
+                    await on_finish()
 
     event_stream_handler = adapter.build_event_stream()
     response = StreamingResponse(

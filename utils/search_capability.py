@@ -9,15 +9,13 @@ from backend.core.conf import settings
 from backend.plugin.ai.dataclasses import ChatAgentDeps
 from backend.plugin.ai.enums import AIWebSearchType
 
-ChatSearchCapability = AbstractCapability[ChatAgentDeps]
-
 
 def build_search_capabilities(
     *,
     web_search: AIWebSearchType,
     supported_builtin_tools: frozenset[type[AbstractBuiltinTool]],
     auto_web_fetch: bool = False,
-) -> list[ChatSearchCapability]:
+) -> list[AbstractCapability[ChatAgentDeps]]:
     """
     构建聊天搜索能力
 
@@ -26,14 +24,18 @@ def build_search_capabilities(
     :param auto_web_fetch: 是否在支持时自动启用 WebFetchTool
     :return:
     """
-    capabilities: list[ChatSearchCapability] = []
+    capabilities: list[AbstractCapability[ChatAgentDeps]] = []
+
+    if web_search == AIWebSearchType.off:
+        return capabilities
 
     if auto_web_fetch and WebFetchTool in supported_builtin_tools:
         capabilities.append(BuiltinTool(WebFetchTool()))
 
     if web_search == AIWebSearchType.builtin:
-        if WebSearchTool in supported_builtin_tools:
-            capabilities.append(BuiltinTool(WebSearchTool()))
+        if WebSearchTool not in supported_builtin_tools:
+            raise errors.RequestError(msg='当前模型不支持内置联网搜索，请选择 Exa、Tavily、DuckDuckGo 或关闭联网搜索')
+        capabilities.append(BuiltinTool(WebSearchTool()))
         return capabilities
 
     if web_search == AIWebSearchType.exa:

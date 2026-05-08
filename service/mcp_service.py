@@ -8,6 +8,7 @@ from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_mcp import mcp_dao
 from backend.plugin.ai.model import Mcp
 from backend.plugin.ai.schema.mcp import CreateMcpParam, UpdateMcpParam
+from backend.utils.pattern_validate import match_string
 
 
 class McpService:
@@ -70,6 +71,8 @@ class McpService:
         :param obj: 创建 MCP 参数
         :return:
         """
+        if obj.tool_prefix and not match_string(r'^[A-Za-z0-9_-]+$', obj.tool_prefix):
+            raise errors.RequestError(msg='MCP 工具名称前缀仅支持字母、数字、下划线和连字符')
         mcp = await mcp_dao.get_by_name(db, name=obj.name)
         if mcp:
             raise errors.ForbiddenError(msg='MCP 已存在')
@@ -85,6 +88,8 @@ class McpService:
         :param obj: 更新 MCP 参数
         :return:
         """
+        if obj.tool_prefix and not match_string(r'^[A-Za-z0-9_-]+$', obj.tool_prefix):
+            raise errors.RequestError(msg='MCP 工具名称前缀仅支持字母、数字、下划线和连字符')
         mcp = await mcp_dao.get(db, pk)
         if not mcp:
             raise errors.NotFoundError(msg='MCP 不存在')

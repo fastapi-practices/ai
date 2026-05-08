@@ -7,6 +7,8 @@ from backend.common.enums import StatusType
 from backend.common.exception import errors
 from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_model import ai_model_dao
+from backend.plugin.ai.crud.crud_provider import ai_provider_dao
+from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.model import AIModel
 from backend.plugin.ai.schema.model import (
     CreateAIModelParam,
@@ -18,6 +20,18 @@ from backend.plugin.ai.schema.model import (
 
 class AIModelService:
     """AI 模型服务"""
+
+    @staticmethod
+    async def get_all(*, db: AsyncSession, provider_id: int) -> Sequence[AIModel]:
+        """
+        获取所有 AI 模型
+
+        :param db: 数据库会话
+        :param provider_id: 供应商 ID
+        :return:
+        """
+        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable.value)
+        return ai_models
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int) -> AIModel:
@@ -54,18 +68,6 @@ class AIModelService:
         return await paging_data(db, ai_model_select)
 
     @staticmethod
-    async def get_all(*, db: AsyncSession, provider_id: int) -> Sequence[AIModel]:
-        """
-        获取所有 AI 模型
-
-        :param db: 数据库会话
-        :param provider_id: 供应商 ID
-        :return:
-        """
-        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable.value)
-        return ai_models
-
-    @staticmethod
     async def create(*, db: AsyncSession, obj: CreateAIModelParam) -> None:
         """
         创建 AI 模型
@@ -74,6 +76,11 @@ class AIModelService:
         :param obj: 创建模型参数
         :return:
         """
+        provider = await ai_provider_dao.get(db, obj.provider_id)
+        if not provider:
+            raise errors.NotFoundError(msg='供应商不存在')
+        if provider.type == AIProviderType.openrouter and '/' not in obj.model_id:
+            raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
         await ai_model_dao.create(db, obj)
 
     @staticmethod
@@ -86,12 +93,16 @@ class AIModelService:
         :return:
         """
         pairs: list[tuple[int, str]] = []
-        pair_set = set()
-
+        pair_set: set[tuple[int, str]] = set()
         for item in obj.items:
             pair = (item.provider_id, item.model_id)
             if pair in pair_set:
                 raise errors.RequestError(msg='本次请求中存在重复模型，请检查后重试')
+            provider = await ai_provider_dao.get(db, item.provider_id)
+            if not provider:
+                raise errors.NotFoundError(msg='供应商不存在')
+            if provider.type == AIProviderType.openrouter and '/' not in item.model_id:
+                raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
             pair_set.add(pair)
             pairs.append(pair)
 
@@ -114,6 +125,11 @@ class AIModelService:
         ai_model = await ai_model_dao.get(db, pk)
         if not ai_model:
             raise errors.NotFoundError(msg='模型不存在')
+        provider = await ai_provider_dao.get(db, obj.provider_id)
+        if not provider:
+            raise errors.NotFoundError(msg='供应商不存在')
+        if provider.type == AIProviderType.openrouter and '/' not in obj.model_id:
+            raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
         return await ai_model_dao.update(db, pk, obj)
 
     @staticmethod

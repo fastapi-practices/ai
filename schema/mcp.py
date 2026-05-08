@@ -19,7 +19,9 @@ class McpSchemaBase(SchemaBase):
     args: list[str] | None = Field(None, description='MCP 命令参数')
     env: dict[str, Any] | None = Field(None, description='MCP 环境变量')
     timeout: float = Field(5, description='客户端初始化超时时间（秒）')
-    read_timeout: float | None = Field(5 * 60, description='等待新消息的最长时间（秒）')
+    read_timeout: float = Field(5 * 60, description='等待新消息的最长时间（秒）')
+    tool_prefix: str | None = Field(None, max_length=64, description='MCP 工具名称前缀')
+    include_instructions: bool = Field(False, description='是否注入 MCP 服务说明')
 
 
 class CreateMcpParam(McpSchemaBase):

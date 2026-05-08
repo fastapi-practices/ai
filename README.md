@@ -6,7 +6,7 @@
 - 支持对话列表、详情、重命名、置顶、删除，以及上下文清理
 - 支持消息编辑保存、删除、清空，以及基于用户消息或 AI 回复重生成
 - 支持快捷短语、供应商、模型、MCP 管理，以及批量同步供应商模型
-- 支持 MCP、联网搜索、思考参数、内置工具能力透传，并适配多种供应商类型
+- 支持 MCP、联网搜索、思考参数、图片生成参数、内置工具能力透传，并适配多种供应商类型
 
 ## 插件类型
 
@@ -26,7 +26,9 @@ AI_TAVILY_API_KEY=''
 
 ```toml
 [settings]
+AI_CODE_MODE_TOOLS = []
 AI_HTTP_MAX_RETRIES = 5
+AI_MCP_MAX_RETRIES = 1
 ```
 
 在 `backend/core/conf.py` 中添加以下内容：
@@ -40,14 +42,16 @@ AI_EXA_API_KEY: str | None = None
 AI_TAVILY_API_KEY: str | None = None
 
 # 基础配置（in plugin.toml）
+AI_CODE_MODE_TOOLS: list[str]
 AI_HTTP_MAX_RETRIES: int
+AI_MCP_MAX_RETRIES: int
 ```
 
 ## 使用方式
 
 1. 安装并启用插件后，重启后端服务
 2. 先创建 AI 供应商，再同步或创建对应模型
-3. 配置 MCP 和快捷短语等辅助能力
+3. 配置 MCP 和快捷短语等辅助能力，其中 OpenRouter 模型 ID 需使用 `供应商/模型` 格式
 4. 发起对话并维护会话历史
 
 ## 卸载说明
