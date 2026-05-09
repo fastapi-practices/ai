@@ -1,4 +1,4 @@
-from typing import TypeAlias
+from typing import cast
 
 from pydantic_ai import ModelSettings
 from pydantic_ai.models.anthropic import AnthropicModelSettings
@@ -10,18 +10,8 @@ from pydantic_ai.models.xai import XaiModelSettings
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType, AIWebSearchType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
-ChatModelSettings: TypeAlias = (
-    ModelSettings
-    | AnthropicModelSettings
-    | GoogleModelSettings
-    | OpenAIChatModelSettings
-    | OpenAIResponsesModelSettings
-    | OpenRouterModelSettings
-    | XaiModelSettings
-)
 
-
-def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_type: int) -> ChatModelSettings:  # noqa: C901
+def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_type: int) -> ModelSettings:  # noqa: C901
     """
     按供应商构建模型配置
 
@@ -69,25 +59,25 @@ def build_model_settings(*, chat_metadata: AIChatForwardedPropsParam, provider_t
     model_settings = chat_metadata.model_dump(include=set(model_setting_fields), exclude_unset=True, exclude_none=True)
 
     if provider == AIProviderType.openai:
-        return OpenAIChatModelSettings(**model_settings)
+        return cast('ModelSettings', OpenAIChatModelSettings(**model_settings))
 
     if provider == AIProviderType.openai_responses:
         if chat_metadata.generation_type == AIChatGenerationType.text and chat_metadata.enable_builtin_tools:
             model_settings['openai_include_code_execution_outputs'] = True
         if chat_metadata.web_search == AIWebSearchType.builtin:
             model_settings['openai_include_web_search_sources'] = True
-        return OpenAIResponsesModelSettings(**model_settings)
+        return cast('ModelSettings', OpenAIResponsesModelSettings(**model_settings))
 
     if provider == AIProviderType.anthropic:
-        return AnthropicModelSettings(**model_settings)
+        return cast('ModelSettings', AnthropicModelSettings(**model_settings))
 
     if provider == AIProviderType.google:
-        return GoogleModelSettings(**model_settings)
+        return cast('ModelSettings', GoogleModelSettings(**model_settings))
 
     if provider == AIProviderType.xai:
-        return XaiModelSettings(**model_settings)
+        return cast('ModelSettings', XaiModelSettings(**model_settings))
 
     if provider == AIProviderType.openrouter:
-        return OpenRouterModelSettings(**model_settings)
+        return cast('ModelSettings', OpenRouterModelSettings(**model_settings))
 
     return ModelSettings(**model_settings)

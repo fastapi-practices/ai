@@ -4,7 +4,6 @@ from urllib.parse import urlsplit
 import httpx
 
 from openai import AsyncOpenAI
-from pydantic_ai import ModelSettings
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
@@ -56,7 +55,6 @@ def get_provider_model(
     model_name: str,
     api_key: str,
     base_url: str,
-    model_settings: ModelSettings,
 ) -> OpenAIChatModel | OpenAIResponsesModel | OpenRouterModel | AnthropicModel | GoogleModel | XaiModel:
     """
     获取供应商模型
@@ -65,7 +63,6 @@ def get_provider_model(
     :param model_name: 模型名称
     :param api_key: 密钥
     :param base_url: API 基础域名
-    :param model_settings: 模型配置
     :return:
     """
     provider_type = AIProviderType(provider_type)
@@ -77,7 +74,6 @@ def get_provider_model(
         model = OpenAIChatModel(
             model_name,
             provider=OpenAIProvider(openai_client=openai_client),
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
         return model
@@ -87,7 +83,6 @@ def get_provider_model(
         model = OpenAIResponsesModel(
             model_name,
             provider=OpenAIProvider(openai_client=openai_client),
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
         return model
@@ -103,7 +98,6 @@ def get_provider_model(
         model = OpenRouterModel(
             model_name,
             provider=provider,
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
         return model
@@ -112,7 +106,6 @@ def get_provider_model(
         model = AnthropicModel(
             model_name,
             provider=AnthropicProvider(base_url=base_url, api_key=api_key, http_client=retry_http_client),
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
         return model
@@ -121,7 +114,6 @@ def get_provider_model(
         model = GoogleModel(
             model_name,
             provider=GoogleProvider(base_url=base_url, api_key=api_key, http_client=retry_http_client),
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = retry_http_client
         return model
@@ -136,7 +128,6 @@ def get_provider_model(
         model = XaiModel(
             model_name,
             provider=XaiProvider(xai_client=xai_client),
-            settings=model_settings,
         )
         _PROVIDER_MODEL_CLIENTS[id(model)] = xai_client
         return model

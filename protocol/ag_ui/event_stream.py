@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, TypeAlias
 
 from ag_ui.core import BaseEvent, RunAgentInput, RunErrorEvent
-from pydantic_ai import Agent, AgentRunResult, ModelRequest, ModelResponse
+from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelRequest, ModelResponse
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
@@ -10,6 +10,8 @@ from starlette.responses import StreamingResponse
 from backend.plugin.ai.dataclasses import ChatAgentDeps
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
+ChatAgentOutput: TypeAlias = BinaryImage | str
+ChatAgent: TypeAlias = Agent[ChatAgentDeps, ChatAgentOutput]
 
 
 async def ag_ui_event_encoder(stream: AsyncIterator[BaseEvent]) -> AsyncIterator[str]:
@@ -27,7 +29,7 @@ def build_streaming_response(
     *,
     db: AsyncSession,
     user_id: int,
-    agent: Agent,
+    agent: ChatAgent,
     run_input: RunAgentInput,
     accept: str | None,
     message_history: list[ChatModelMessage],

@@ -1,9 +1,10 @@
+from typing import Any
+
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai_harness import CodeMode
 
 from backend.common.exception import errors
 from backend.core.conf import settings
-from backend.plugin.ai.dataclasses import ChatAgentDeps
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
@@ -35,7 +36,7 @@ def build_code_mode_capability(
     provider_type: int,
     supports_tools: bool,
     has_builtin_tools: bool,
-) -> AbstractCapability[ChatAgentDeps] | None:
+) -> AbstractCapability[Any] | None:
     """
     按当前会话参数构建 CodeMode 能力
 
@@ -53,10 +54,6 @@ def build_code_mode_capability(
         has_builtin_tools=has_builtin_tools,
     ):
         return None
-    if not isinstance(settings.AI_CODE_MODE_TOOLS, list) or any(
-        not isinstance(tool, str) for tool in settings.AI_CODE_MODE_TOOLS
-    ):
-        raise errors.ServerError(msg='AI_CODE_MODE_TOOLS 必须配置为字符串列表')
     code_mode_tools = [tool.strip() for tool in settings.AI_CODE_MODE_TOOLS if tool.strip()]
     if not code_mode_tools:
         return None
