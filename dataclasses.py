@@ -1,10 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_ai import ModelRequest, ModelResponse, Tool
-from pydantic_ai.builtin_tools import AbstractBuiltinTool
+from pydantic_ai import ModelRequest, ModelResponse
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.toolsets import AbstractToolset
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.plugin.ai.model.conversation import AIConversation
@@ -24,9 +22,6 @@ class ChatAgentDeps:
 class ChatAgentParts:
     """聊天代理参数片段"""
 
-    tools: list[Tool[Any]] = field(default_factory=list)
-    builtin_tools: list[AbstractBuiltinTool] = field(default_factory=list)
-    toolsets: list[AbstractToolset[Any]] = field(default_factory=list)
     capabilities: list[AbstractCapability[Any]] = field(default_factory=list)
 
 

@@ -3,8 +3,8 @@ from typing import Any, TypeAlias
 
 from ag_ui.core import RunAgentInput, RunErrorEvent
 from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelRequest, ModelResponse, TextPart, UserPromptPart
-from pydantic_ai.builtin_tools import AbstractBuiltinTool, CodeExecutionTool
-from pydantic_ai.capabilities import Thinking
+from pydantic_ai.builtin_tools import AbstractBuiltinTool, CodeExecutionTool, WebFetchTool
+from pydantic_ai.capabilities import BuiltinTool, Thinking
 from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
@@ -17,17 +17,17 @@ from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatAgentParts, ChatCompletionPersistence
-from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIProviderType
+from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIProviderType, AIWebSearchType
 from backend.plugin.ai.model import AIModel, AIProvider
 from backend.plugin.ai.protocol.ag_ui.event_stream import build_streaming_response
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
-from backend.plugin.ai.tools.chat_builtin_toolset import build_chat_builtin_toolset
+from backend.plugin.ai.tools.chat_builtin_toolset import build_chat_builtin_capability
 from backend.plugin.ai.utils.capabilities.code_mode import build_code_mode_capability, should_enable_function_tools
-from backend.plugin.ai.utils.capabilities.image_generation import build_image_generation_tool
-from backend.plugin.ai.utils.capabilities.mcp import build_mcp_toolset
-from backend.plugin.ai.utils.capabilities.search import build_search_agent_parts
+from backend.plugin.ai.utils.capabilities.image_generation import build_image_generation_capability
+from backend.plugin.ai.utils.capabilities.mcp import build_mcp_capability
+from backend.plugin.ai.utils.capabilities.search import build_search_capabilities
 from backend.plugin.ai.utils.chat_control import build_model_settings
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.model_control import close_provider_model, get_provider_model
@@ -101,6 +101,8 @@ async def build_chat_agent_parts(  # noqa: C901
     :return:
     """
     parts = ChatAgentParts()
+    has_builtin_tools = False
+    has_function_tool_sources = False
 
     if forwarded_props.thinking is not None:
         thinking_effort = (
@@ -112,43 +114,58 @@ async def build_chat_agent_parts(  # noqa: C901
 
     if forwarded_props.mcp_ids:
         mcps = await mcp_service.get_by_ids(db=db, mcp_ids=forwarded_props.mcp_ids)
-        parts.toolsets.extend(build_mcp_toolset(mcp=mcp) for mcp in mcps)
+        parts.capabilities.extend(build_mcp_capability(mcp=mcp) for mcp in mcps)
+        has_function_tool_sources = True
 
-    search_parts = build_search_agent_parts(
-        web_search=forwarded_props.web_search,
-        supported_builtin_tools=supported_builtin_tools,
-        auto_web_fetch=AIProviderType(provider_type) != AIProviderType.google
+    auto_web_fetch = (
+        AIProviderType(provider_type) != AIProviderType.google
         and forwarded_props.enable_builtin_tools
-        and forwarded_props.generation_type == AIChatGenerationType.text,
+        and forwarded_props.generation_type == AIChatGenerationType.text
     )
-    parts.tools.extend(search_parts.tools)
-    parts.builtin_tools.extend(search_parts.builtin_tools)
-    parts.toolsets.extend(search_parts.toolsets)
+    auto_web_fetch_enabled = (
+        auto_web_fetch and forwarded_props.web_search != AIWebSearchType.off and WebFetchTool in supported_builtin_tools
+    )
+    parts.capabilities.extend(
+        build_search_capabilities(
+            web_search=forwarded_props.web_search,
+            supported_builtin_tools=supported_builtin_tools,
+            auto_web_fetch=auto_web_fetch,
+        )
+    )
+    has_builtin_tools = (
+        has_builtin_tools or forwarded_props.web_search == AIWebSearchType.builtin or auto_web_fetch_enabled
+    )
+    has_function_tool_sources = has_function_tool_sources or forwarded_props.web_search in {
+        AIWebSearchType.exa,
+        AIWebSearchType.tavily,
+        AIWebSearchType.duckduckgo,
+    }
 
     if (
         forwarded_props.enable_builtin_tools
         and forwarded_props.generation_type == AIChatGenerationType.text
         and CodeExecutionTool in supported_builtin_tools
     ):
-        parts.builtin_tools.append(CodeExecutionTool())
+        parts.capabilities.append(BuiltinTool(CodeExecutionTool()))
+        has_builtin_tools = True
 
     if forwarded_props.generation_type == AIChatGenerationType.image:
         if not supports_image_output:
             raise errors.RequestError(msg='当前模型暂不支持图片生成，请更换模型')
-        parts.builtin_tools.append(
-            build_image_generation_tool(forwarded_props=forwarded_props, provider_type=provider_type)
+        parts.capabilities.append(
+            build_image_generation_capability(forwarded_props=forwarded_props, provider_type=provider_type)
         )
+        has_builtin_tools = True
 
-    has_builtin_tools = bool(parts.builtin_tools)
     function_tools_allowed = should_enable_function_tools(
         provider_type=provider_type,
         supports_tools=supports_tools,
         has_builtin_tools=has_builtin_tools,
     )
     if forwarded_props.enable_builtin_tools and function_tools_allowed:
-        parts.toolsets.append(build_chat_builtin_toolset())
+        parts.capabilities.append(build_chat_builtin_capability())
+        has_function_tool_sources = True
 
-    has_function_tool_sources = bool(parts.tools or parts.toolsets)
     if has_function_tool_sources and not function_tools_allowed:
         if AIProviderType(provider_type) == AIProviderType.google and has_builtin_tools:
             raise errors.RequestError(
@@ -165,7 +182,6 @@ async def build_chat_agent_parts(  # noqa: C901
         if code_mode_capability is not None:
             parts.capabilities.append(code_mode_capability)
     return parts
-
 
 
 async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwardedPropsParam) -> Agent:
@@ -200,9 +216,6 @@ async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwarded
             model=model_instance,
             model_settings=model_settings,
             output_type=[BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str,
-            tools=agent_parts.tools,
-            builtin_tools=agent_parts.builtin_tools,
-            toolsets=agent_parts.toolsets,
             capabilities=agent_parts.capabilities,
         )
     except ValueError as e:

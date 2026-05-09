@@ -1,7 +1,7 @@
 from typing import Any
 
+from pydantic_ai.capabilities import AbstractCapability, Toolset
 from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
-from pydantic_ai.toolsets import AbstractToolset
 
 from backend.common.exception import errors
 from backend.core.conf import settings
@@ -9,9 +9,9 @@ from backend.plugin.ai.enums import McpType
 from backend.plugin.ai.model import Mcp
 
 
-def build_mcp_toolset(*, mcp: Mcp) -> AbstractToolset[Any]:
+def build_mcp_capability(*, mcp: Mcp) -> AbstractCapability[Any]:
     """
-    构建 MCP 工具集
+    构建 MCP 能力
 
     :param mcp: MCP 配置
     :return:
@@ -55,4 +55,4 @@ def build_mcp_toolset(*, mcp: Mcp) -> AbstractToolset[Any]:
             include_instructions=mcp.include_instructions,
         )
 
-    return mcp_server
+    return Toolset(mcp_server)

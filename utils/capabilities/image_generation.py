@@ -1,4 +1,7 @@
+from typing import Any
+
 from pydantic_ai.builtin_tools import ImageGenerationTool
+from pydantic_ai.capabilities import AbstractCapability, BuiltinTool
 
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
@@ -24,13 +27,13 @@ GOOGLE_IMAGE_GENERATION_FIELDS = {
 }
 
 
-def build_image_generation_tool(
+def build_image_generation_capability(
     *,
     forwarded_props: AIChatForwardedPropsParam,
     provider_type: int,
-) -> ImageGenerationTool:
+) -> AbstractCapability[Any]:
     """
-    构建图片生成内置工具
+    构建图片生成能力
 
     :param forwarded_props: 聊天扩展参数
     :param provider_type: 供应商类型
@@ -43,4 +46,4 @@ def build_image_generation_tool(
     )
     image_settings = forwarded_props.model_dump(include=image_fields, exclude_unset=True, exclude_none=True)
     image_tool_settings = {IMAGE_GENERATION_FIELD_MAP[field]: value for field, value in image_settings.items()}
-    return ImageGenerationTool(**image_tool_settings)
+    return BuiltinTool(ImageGenerationTool(**image_tool_settings))
