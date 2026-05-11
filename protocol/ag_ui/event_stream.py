@@ -34,7 +34,7 @@ def build_streaming_response(
     accept: str | None,
     message_history: list[ChatModelMessage],
     on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]],
-    on_run_error: Callable[[RunErrorEvent], Awaitable[None]],
+    on_run_error: Callable[[str], Awaitable[None]],
     on_finish: Callable[[], Awaitable[None]] | None = None,
 ) -> StreamingResponse:
     """
@@ -64,7 +64,7 @@ def build_streaming_response(
             async for event in event_stream:
                 if isinstance(event, RunErrorEvent) and not error_handled:
                     error_handled = True
-                    await on_run_error(event)
+                    await on_run_error(event.message or '')
                 yield event
         finally:
             try:

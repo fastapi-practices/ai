@@ -4,7 +4,7 @@ from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from backend.common.schema import SchemaBase
-from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiMessagesSnapshotDetail
+from backend.plugin.ai.protocol.default_schema import AIChatMessagesSnapshotDetail
 
 
 class AIConversationSchemaBase(SchemaBase):
@@ -68,4 +68,4 @@ class GetAIConversationDetail(SchemaBase):
     context_cleared_time: datetime | None = Field(default=None, description='上下文清除时间')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
-    messages_snapshot: AIChatAgUiMessagesSnapshotDetail = Field(description='对话消息快照')
+    messages_snapshot: AIChatMessagesSnapshotDetail = Field(description='对话消息快照')

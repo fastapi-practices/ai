@@ -12,13 +12,13 @@ from backend.plugin.ai.chat_runtime import (
     build_chat_agent,
     is_user_prompt_message,
     persist_completion_messages,
-    prepare_run_input,
+    prepare_run_context,
     stream_response,
 )
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import ChatCompletionPersistence
-from backend.plugin.ai.protocol.ag_ui.request_decoder import decode_input_messages
+from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
 from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.conversation_service import ai_conversation_service
@@ -143,8 +143,9 @@ class ChatService:
         :param accept: Accept 请求头
         :return:
         """
+        protocol_adapter = get_chat_protocol_adapter()
         try:
-            current_messages = decode_input_messages(messages=obj.messages)
+            current_messages = protocol_adapter.decode_input_messages(messages=obj.messages)
         except Exception as e:
             log.warning(f'聊天消息加载失败: {e}')
             raise errors.RequestError(msg='聊天消息格式非法') from e
@@ -155,12 +156,13 @@ class ChatService:
         if not isinstance(current_message, ModelRequest) or not is_user_prompt_message(message=current_message):
             raise errors.RequestError(msg='最后一条消息必须是用户消息')
 
-        run_input = prepare_run_input(
+        run_context = prepare_run_context(
             conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
+            protocol_adapter=protocol_adapter,
         )
-        conversation_id = run_input.thread_id
-        forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
+        conversation_id = run_context.conversation_id
+        forwarded_props = run_context.forwarded_props
         agent = await build_chat_agent(db=db, forwarded_props=forwarded_props)
         prompt = self._extract_prompt(current_message=current_message)
         payload_messages = to_jsonable_python(current_messages, by_alias=True)
@@ -206,7 +208,8 @@ class ChatService:
             db=db,
             user_id=user_id,
             agent=agent,
-            run_input=run_input,
+            run_context=run_context,
+            protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
             on_complete=handle_complete,

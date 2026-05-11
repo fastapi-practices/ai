@@ -1,7 +1,6 @@
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeAlias
+from typing import Any
 
-from ag_ui.core import RunAgentInput, RunErrorEvent
 from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.builtin_tools import AbstractBuiltinTool, CodeExecutionTool, WebFetchTool
 from pydantic_ai.capabilities import BuiltinTool, Thinking
@@ -11,7 +10,6 @@ from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.common.log import log
-from backend.database.db import uuid4_str
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
@@ -19,7 +17,7 @@ from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatAgentParts, ChatCompletionPersistence
 from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIProviderType, AIWebSearchType
 from backend.plugin.ai.model import AIModel, AIProvider
-from backend.plugin.ai.protocol.ag_ui.event_stream import build_streaming_response
+from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage, ChatProtocolAdapter, ChatRunContext
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.mcp_service import mcp_service
@@ -31,10 +29,6 @@ from backend.plugin.ai.utils.capabilities.search import build_search_capabilitie
 from backend.plugin.ai.utils.chat_control import build_model_settings
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.model_control import close_provider_model, get_provider_model
-
-ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
-ChatAgentOutput: TypeAlias = BinaryImage | str
-ChatAgent: TypeAlias = Agent[ChatAgentDeps, ChatAgentOutput]
 
 
 def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
@@ -226,38 +220,30 @@ async def build_chat_agent(*, db: AsyncSession, forwarded_props: AIChatForwarded
         raise
 
 
-def prepare_run_input(
+def prepare_run_context(
     *,
     conversation_id: str | None,
     forwarded_props: AIChatForwardedPropsParam,
+    protocol_adapter: ChatProtocolAdapter,
     default_conversation_id: str | None = None,
     expected_conversation_id: str | None = None,
-) -> RunAgentInput:
+) -> ChatRunContext:
     """
     解析并补全运行参数
 
     :param conversation_id: 对话 ID
     :param forwarded_props: 聊天扩展参数
+    :param protocol_adapter: 协议适配器
     :param default_conversation_id: 默认对话 ID
     :param expected_conversation_id: 期望对话 ID
     :return:
     """
-    conversation_id = conversation_id or default_conversation_id or uuid4_str()
-    run_input = RunAgentInput.model_validate({
-        'thread_id': conversation_id,
-        'run_id': uuid4_str(),
-        'parent_run_id': None,
-        'state': {},
-        'messages': [],
-        'tools': [],
-        'context': [],
-        'forwarded_props': forwarded_props.model_dump(),
-    })
-
-    if expected_conversation_id is not None and run_input.thread_id != expected_conversation_id:
-        raise errors.RequestError(msg='请求体中的对话 ID 与路径不一致')
-
-    return run_input
+    return protocol_adapter.build_run_context(
+        conversation_id=conversation_id,
+        forwarded_props=forwarded_props,
+        default_conversation_id=default_conversation_id,
+        expected_conversation_id=expected_conversation_id,
+    )
 
 
 async def persist_completion_messages(
@@ -388,7 +374,8 @@ def stream_response(
     db: AsyncSession,
     user_id: int,
     agent: ChatAgent,
-    run_input: RunAgentInput,
+    run_context: ChatRunContext,
+    protocol_adapter: ChatProtocolAdapter,
     accept: str | None,
     message_history: list[ChatModelMessage],
     on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]],
@@ -400,7 +387,8 @@ def stream_response(
     :param db: 数据库会话
     :param user_id: 用户 ID
     :param agent: 聊天代理
-    :param run_input: 运行参数
+    :param run_context: 运行上下文
+    :param protocol_adapter: 协议适配器
     :param accept: Accept 请求头
     :param message_history: 消息历史
     :param on_complete: 完成回调
@@ -408,8 +396,8 @@ def stream_response(
     :return:
     """
 
-    async def handle_run_error(event: RunErrorEvent) -> None:
-        raw_error_message = ' '.join(event.message.split()) if event.message else ''
+    async def handle_run_error(message: str) -> None:
+        raw_error_message = ' '.join(message.split()) if message else ''
         try:
             error_message = raw_error_message or '模型请求失败，请稍后重试'
             await persist_completion_messages(
@@ -440,11 +428,11 @@ def stream_response(
         except Exception as e:
             log.warning(f'关闭模型供应商客户端失败: {e}')
 
-    return build_streaming_response(
+    return protocol_adapter.build_streaming_response(
         db=db,
         user_id=user_id,
         agent=agent,
-        run_input=run_input,
+        run_context=run_context,
         accept=accept,
         message_history=message_history,
         on_complete=on_complete,

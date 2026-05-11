@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from backend.plugin.ai.enums import AIChatGenerationType, AIChatThinkingType, AIWebSearchType
-from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiInputMessageParam
+from backend.plugin.ai.protocol.default_schema import AIChatInputMessageParam
 from backend.plugin.ai.protocol.schema import AIChatSchemaBase
 
 
@@ -96,7 +96,7 @@ class AIChatRequestBase(AIChatSchemaBase):
 class AIChatCompletionParam(AIChatRequestBase):
     """聊天参数"""
 
-    messages: list[AIChatAgUiInputMessageParam] = Field(min_length=1, description='当前轮输入消息列表')
+    messages: list[AIChatInputMessageParam] = Field(min_length=1, description='当前轮输入消息列表')
 
 
 class AIChatRegenerateParam(AIChatRequestBase):
