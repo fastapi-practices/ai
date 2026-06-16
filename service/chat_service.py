@@ -1,22 +1,16 @@
 from typing import Any
 
-from pydantic_ai import AgentRunResult, ModelRequest, UserPromptPart
+from pydantic_ai import ModelRequest, UserPromptPart
 from pydantic_core import to_jsonable_python
 from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.database.db import async_db_session
-from backend.plugin.ai.chat_runtime import (
-    build_chat_agent,
-    is_user_prompt_message,
-    persist_completion_messages,
-    prepare_run_context,
-    stream_response,
-)
+from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import ChatCompletionPersistence
+from backend.plugin.ai.dataclasses import AppendStrategy, CompletionPersistence
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
 from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
@@ -153,10 +147,9 @@ class ChatService:
         if not isinstance(current_message, ModelRequest) or not is_user_prompt_message(message=current_message):
             raise errors.RequestError(msg='最后一条消息必须是用户消息')
 
-        run_context = prepare_run_context(
+        run_context = protocol_adapter.build_run_context(
             conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
-            protocol_adapter=protocol_adapter,
         )
         conversation_id = run_context.conversation_id
         forwarded_props = run_context.forwarded_props
@@ -172,7 +165,7 @@ class ChatService:
         )
 
         async with async_db_session() as db:
-            agent = await build_chat_agent(db=db, forwarded_props=forwarded_props)
+            session, agent = await open_chat_session(db=db, forwarded_props=forwarded_props)
             state = await ai_conversation_service.get_chat_state(
                 db=db,
                 conversation_id=conversation_id,
@@ -181,36 +174,23 @@ class ChatService:
                 require_messages=True,
             )
         message_history = state.model_messages[state.context_start_index :]
-        persistence = ChatCompletionPersistence(
+        persistence = CompletionPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
             conversation=state.conversation,
             title=state.conversation.title if state.conversation else prompt,
-            replace_message_row_ids=None,
-            replace_start_message_index=None,
-            replace_end_message_index=None,
-            insert_before_message_index=None,
-            base_message_index=len(state.message_rows),
             result_offset=len(message_history),
+            strategy=AppendStrategy(base_message_index=len(state.message_rows)),
         )
 
-        async def handle_complete(result: AgentRunResult[Any]) -> None:
-            async with async_db_session.begin() as db:
-                await persist_completion_messages(
-                    db=db,
-                    persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
-                )
-
-        return stream_response(
+        return session.stream(
             user_id=user_id,
             agent=agent,
             run_context=run_context,
             protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
-            on_complete=handle_complete,
             persistence=persistence,
         )
 

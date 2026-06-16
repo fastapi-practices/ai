@@ -7,10 +7,11 @@ from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.database.db import uuid4_str
+from backend.plugin.ai.dataclasses import ChatRunContext
 from backend.plugin.ai.protocol.ag_ui.event_stream import build_streaming_response
 from backend.plugin.ai.protocol.ag_ui.request_decoder import decode_input_messages as decode_ag_ui_input_messages
 from backend.plugin.ai.protocol.ag_ui.snapshot_builder import serialize_messages_to_snapshot as serialize_ag_ui_snapshot
-from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage, ChatRunContext
+from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
 

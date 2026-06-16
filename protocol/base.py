@@ -1,25 +1,15 @@
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
 from typing import Any, Protocol, TypeAlias
 
 from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelMessage, ModelRequest, ModelResponse
 from starlette.responses import StreamingResponse
 
-from backend.plugin.ai.dataclasses import ChatAgentDeps
+from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatRunContext
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
 ChatAgentOutput: TypeAlias = BinaryImage | str
 ChatAgent: TypeAlias = Agent[ChatAgentDeps, ChatAgentOutput]
-
-
-@dataclass(frozen=True, slots=True)
-class ChatRunContext:
-    """协议运行上下文，核心聊天流程只读取通用字段。"""
-
-    conversation_id: str
-    forwarded_props: AIChatForwardedPropsParam
-    protocol_context: Any
 
 
 class ChatProtocolAdapter(Protocol):

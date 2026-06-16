@@ -15,6 +15,7 @@ from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.model import AIProvider
+from backend.plugin.ai.providers.base import normalize_provider_api_host
 from backend.plugin.ai.schema.model import CreateAIModelParam
 from backend.plugin.ai.schema.provider import (
     CreateAIProviderParam,
@@ -23,7 +24,6 @@ from backend.plugin.ai.schema.provider import (
     UpdateAIProviderParam,
 )
 from backend.plugin.ai.utils.api_key_ops import mask_api_key
-from backend.plugin.ai.utils.provider_control import normalize_provider_api_host
 from backend.utils.timezone import timezone
 
 

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic_ai.capabilities import AbstractCapability, Toolset
@@ -5,13 +6,34 @@ from pydantic_ai.mcp import MCPToolset, SSETransport, StdioTransport, Streamable
 
 from backend.common.exception import errors
 from backend.core.conf import settings
+from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import McpType
 from backend.plugin.ai.model import Mcp
+from backend.plugin.ai.service.mcp_service import mcp_service
 
 
-def build_mcp_capability(*, mcp: Mcp) -> AbstractCapability[Any]:
+async def build_mcp_capability(ctx: CapabilityContext) -> Sequence[CapabilityResult]:
     """
     构建 MCP 能力
+
+    :param ctx: 能力构建上下文
+    :return:
+    """
+    if not ctx.forwarded_props.mcp_ids:
+        return ()
+    mcps = await mcp_service.get_by_ids(db=ctx.db, mcp_ids=ctx.forwarded_props.mcp_ids)
+    return tuple(
+        CapabilityResult(
+            capability=_build_single_mcp(mcp=mcp),
+            introduces_function_tool_source=True,
+        )
+        for mcp in mcps
+    )
+
+
+def _build_single_mcp(*, mcp: Mcp) -> AbstractCapability[Any]:
+    """
+    构建单个 MCP 能力
 
     :param mcp: MCP 配置
     :return:

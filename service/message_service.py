@@ -1,23 +1,25 @@
 from copy import deepcopy
 
-from pydantic_ai import Agent, AgentRunResult, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, UserPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.database.db import async_db_session
-from backend.plugin.ai.chat_runtime import (
-    build_chat_agent,
-    is_user_prompt_message,
-    persist_completion_messages,
-    prepare_run_context,
-    stream_response,
-)
+from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
+from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import ChatCompletionPersistence, ChatConversationState
+from backend.plugin.ai.dataclasses import (
+    AppendStrategy,
+    ChatConversationState,
+    ChatRunContext,
+    CompletionPersistence,
+    InsertBeforeStrategy,
+    ReplaceRangeStrategy,
+)
 from backend.plugin.ai.model import AIMessage
-from backend.plugin.ai.protocol.base import ChatProtocolAdapter, ChatRunContext
+from backend.plugin.ai.protocol.base import ChatAgent, ChatProtocolAdapter
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam, AIChatRegenerateParam
 from backend.plugin.ai.schema.conversation import UpdateAIConversationParam
@@ -70,7 +72,14 @@ class AIMessageService:
         user_id: int,
         conversation_id: str,
         obj: AIChatRegenerateParam,
-    ) -> tuple[ChatRunContext, AIChatForwardedPropsParam, Agent, ChatConversationState, ChatProtocolAdapter]:
+    ) -> tuple[
+        ChatRunContext,
+        AIChatForwardedPropsParam,
+        AgentSession,
+        ChatAgent,
+        ChatConversationState,
+        ChatProtocolAdapter,
+    ]:
         """
         预加载重生成所需上下文
 
@@ -80,16 +89,15 @@ class AIMessageService:
         :return:
         """
         protocol_adapter = get_chat_protocol_adapter()
-        run_context = prepare_run_context(
+        run_context = protocol_adapter.build_run_context(
             conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
-            protocol_adapter=protocol_adapter,
             default_conversation_id=conversation_id,
             expected_conversation_id=conversation_id,
         )
         forwarded_props = run_context.forwarded_props
         async with async_db_session() as db:
-            agent = await build_chat_agent(db=db, forwarded_props=forwarded_props)
+            session, agent = await open_chat_session(db=db, forwarded_props=forwarded_props)
             state = await ai_conversation_service.get_chat_state(
                 db=db,
                 conversation_id=conversation_id,
@@ -97,7 +105,7 @@ class AIMessageService:
                 must_exist=True,
                 require_messages=True,
             )
-        return run_context, forwarded_props, agent, state, protocol_adapter
+        return run_context, forwarded_props, session, agent, state, protocol_adapter
 
     async def regenerate_from_user_message(
         self,
@@ -118,7 +126,7 @@ class AIMessageService:
         :param accept: Accept 请求头
         :return:
         """
-        run_context, forwarded_props, agent, state, protocol_adapter = await self._prepare_regenerate_context(
+        run_context, forwarded_props, session, agent, state, protocol_adapter = await self._prepare_regenerate_context(
             user_id=user_id,
             conversation_id=conversation_id,
             obj=obj,
@@ -143,50 +151,32 @@ class AIMessageService:
             reply_end_index = (
                 next_user_message_index - 1 if next_user_message_index is not None else len(state.model_messages) - 1
             )
-            persistence = ChatCompletionPersistence(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                forwarded_props=forwarded_props,
-                conversation=state.conversation,
-                title=state.conversation.title,
-                replace_message_row_ids=[row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]],
-                replace_start_message_index=reply_start_index,
-                replace_end_message_index=reply_end_index,
-                insert_before_message_index=None,
-                base_message_index=reply_start_index,
-                result_offset=len(message_history),
+            strategy = ReplaceRangeStrategy(
+                row_ids=tuple(row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]),
+                start_index=reply_start_index,
+                end_index=reply_end_index,
             )
+        elif reply_start_index < len(state.message_rows):
+            strategy = InsertBeforeStrategy(insert_before_index=reply_start_index, base_message_index=reply_start_index)
         else:
-            persistence = ChatCompletionPersistence(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                forwarded_props=forwarded_props,
-                conversation=state.conversation,
-                title=state.conversation.title,
-                replace_message_row_ids=None,
-                replace_start_message_index=None,
-                replace_end_message_index=None,
-                insert_before_message_index=reply_start_index if reply_start_index < len(state.message_rows) else None,
-                base_message_index=reply_start_index,
-                result_offset=len(message_history),
-            )
+            strategy = AppendStrategy(base_message_index=reply_start_index)
+        persistence = CompletionPersistence(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            forwarded_props=forwarded_props,
+            conversation=state.conversation,
+            title=state.conversation.title,
+            result_offset=len(message_history),
+            strategy=strategy,
+        )
 
-        async def handle_complete(result: AgentRunResult[object]) -> None:
-            async with async_db_session.begin() as db:
-                await persist_completion_messages(
-                    db=db,
-                    persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
-                )
-
-        return stream_response(
+        return session.stream(
             user_id=user_id,
             agent=agent,
             run_context=run_context,
             protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
-            on_complete=handle_complete,
             persistence=persistence,
         )
 
@@ -209,7 +199,7 @@ class AIMessageService:
         :param accept: Accept 请求头
         :return:
         """
-        run_context, forwarded_props, agent, state, protocol_adapter = await self._prepare_regenerate_context(
+        run_context, forwarded_props, session, agent, state, protocol_adapter = await self._prepare_regenerate_context(
             user_id=user_id,
             conversation_id=conversation_id,
             obj=obj,
@@ -240,36 +230,27 @@ class AIMessageService:
             next_user_message_index - 1 if next_user_message_index is not None else len(state.model_messages) - 1
         )
         message_history = state.model_messages[state.context_start_index : user_message_index + 1]
-        persistence = ChatCompletionPersistence(
+        persistence = CompletionPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
             conversation=state.conversation,
             title=state.conversation.title,
-            replace_message_row_ids=[row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]],
-            replace_start_message_index=reply_start_index,
-            replace_end_message_index=reply_end_index,
-            insert_before_message_index=None,
-            base_message_index=reply_start_index,
             result_offset=len(message_history),
+            strategy=ReplaceRangeStrategy(
+                row_ids=tuple(row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]),
+                start_index=reply_start_index,
+                end_index=reply_end_index,
+            ),
         )
 
-        async def handle_complete(result: AgentRunResult[object]) -> None:
-            async with async_db_session.begin() as db:
-                await persist_completion_messages(
-                    db=db,
-                    persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
-                )
-
-        return stream_response(
+        return session.stream(
             user_id=user_id,
             agent=agent,
             run_context=run_context,
             protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
-            on_complete=handle_complete,
             persistence=persistence,
         )
 
