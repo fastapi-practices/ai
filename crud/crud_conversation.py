@@ -35,6 +35,25 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         """
         return await self.select_model_by_column(db, conversation_id=conversation_id, deleted=0)
 
+    async def get_by_conversation_id_for_update(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+    ) -> AIConversation | None:
+        """
+        通过对话 ID 获取并锁定对话
+
+        :param db: 数据库会话
+        :param conversation_id: 对话 ID
+        :return:
+        """
+        stmt = (
+            select(self.model)
+            .where(self.model.conversation_id == conversation_id, self.model.deleted == 0)
+            .with_for_update()
+        )
+        return await db.scalar(stmt)
+
     async def get_select(self, user_id: int) -> Select[tuple[AIConversation]]:
         """
         获取对话列表查询表达式

@@ -110,70 +110,6 @@ _SNAPSHOT_MESSAGE_BUILD_CONFIGS: tuple[SnapshotMessageBuildConfig, ...] = (
 )
 
 
-def _build_fragment_snapshot_id(
-    *,
-    message_id: int | None,
-    message_index: int,
-    fragment_type: str,
-    fragment_index: int,
-    primary_without_suffix: bool = False,
-) -> str:
-    """
-    构建分片快照消息 ID
-
-    :param message_id: 持久化消息 ID
-    :param message_index: 消息索引
-    :param fragment_type: 分片类型
-    :param fragment_index: 分片索引
-    :param primary_without_suffix: 首个分片是否省略后缀
-    :return:
-    """
-    base_id = f'msg_{message_id if message_id is not None else message_index}'
-    if primary_without_suffix and fragment_index == 0:
-        return base_id
-    return f'{base_id}_{fragment_type}_{fragment_index}'
-
-
-def _build_snapshot_message(
-    *,
-    encoded_message: Message,
-    base_meta: dict[str, SnapshotMetaValue],
-    message_id: int | None,
-    message_index: int,
-    fragment_indexes: defaultdict[str, int],
-    primary_without_suffix: bool,
-) -> SnapshotMessage:
-    """
-    根据标准 AG-UI 消息构建单条快照消息
-
-    :param encoded_message: 标准 AG-UI 消息
-    :param base_meta: 公共元信息
-    :param message_id: 持久化消息 ID
-    :param message_index: 消息索引
-    :param fragment_indexes: 各分片类型索引
-    :param primary_without_suffix: 是否为首条输出消息
-    :return:
-    """
-    for config in _SNAPSHOT_MESSAGE_BUILD_CONFIGS:
-        if not isinstance(encoded_message, config.message_type):
-            continue
-        fragment_index = fragment_indexes[config.fragment_type]
-        snapshot_message = config.detail_model(
-            id=_build_fragment_snapshot_id(
-                message_id=message_id,
-                message_index=message_index,
-                fragment_type=config.fragment_type,
-                fragment_index=fragment_index,
-                primary_without_suffix=primary_without_suffix and config.primary_without_suffix,
-            ),
-            **config.extra_fields_getter(encoded_message),
-            **base_meta,
-        )
-        fragment_indexes[config.fragment_type] += 1
-        return cast('SnapshotMessage', snapshot_message)
-    raise ValueError(f'不支持的 AG-UI 消息类型: {type(encoded_message).__name__}')
-
-
 def _build_snapshot_messages_from_encoded_messages(
     *,
     encoded_messages: Sequence[Message],
@@ -196,16 +132,27 @@ def _build_snapshot_messages_from_encoded_messages(
     fragment_indexes: defaultdict[str, int] = defaultdict(int)
 
     for encoded_message in encoded_messages:
-        snapshot_messages.append(
-            _build_snapshot_message(
-                encoded_message=encoded_message,
-                base_meta=base_meta,
-                message_id=message_id,
-                message_index=message_index,
-                fragment_indexes=fragment_indexes,
-                primary_without_suffix=not snapshot_messages,
+        for config in _SNAPSHOT_MESSAGE_BUILD_CONFIGS:
+            if not isinstance(encoded_message, config.message_type):
+                continue
+            fragment_index = fragment_indexes[config.fragment_type]
+            base_id = f'msg_{message_id if message_id is not None else message_index}'
+            primary_without_suffix = not snapshot_messages and config.primary_without_suffix and fragment_index == 0
+            snapshot_id = base_id if primary_without_suffix else f'{base_id}_{config.fragment_type}_{fragment_index}'
+            snapshot_messages.append(
+                cast(
+                    'SnapshotMessage',
+                    config.detail_model(
+                        id=snapshot_id,
+                        **config.extra_fields_getter(encoded_message),
+                        **base_meta,
+                    ),
+                )
             )
-        )
+            fragment_indexes[config.fragment_type] += 1
+            break
+        else:
+            raise ValueError(f'不支持的 AG-UI 消息类型: {type(encoded_message).__name__}')
 
     if snapshot_messages or not fallback_empty_assistant:
         return snapshot_messages

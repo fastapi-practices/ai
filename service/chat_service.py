@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic_ai import ModelRequest, UserPromptPart
 from pydantic_core import to_jsonable_python
 from starlette.responses import StreamingResponse
@@ -10,9 +8,9 @@ from backend.database.db import async_db_session
 from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import AppendStrategy, CompletionPersistence
+from backend.plugin.ai.dataclasses import CompletionPersistence
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
-from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
+from backend.plugin.ai.schema.chat import AIChatCompletionParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.conversation_service import ai_conversation_service
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
@@ -20,104 +18,6 @@ from backend.plugin.ai.utils.conversation_control import normalize_generated_con
 
 class ChatService:
     """聊天服务"""
-
-    @staticmethod
-    def _extract_prompt(*, current_message: ModelRequest) -> str:
-        """
-        提取当前轮用户输入文本
-
-        :param current_message: 当前轮消息
-        :return:
-        """
-        if not current_message.parts:
-            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
-        first_part = current_message.parts[0]
-        if not isinstance(first_part, UserPromptPart):
-            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
-
-        prompt_parts: list[str] = []
-        has_binary_input = False
-        if isinstance(first_part.content, str):
-            prompt_parts.append(first_part.content)
-        else:
-            for item in first_part.content:
-                if isinstance(item, str):
-                    prompt_parts.append(item)
-                else:
-                    has_binary_input = True
-
-        prompt = ' '.join(' '.join(part.split()) for part in prompt_parts if part.split())
-        if not prompt and not has_binary_input:
-            raise errors.RequestError(msg='当前轮用户消息不能为空')
-        return prompt
-
-    @staticmethod
-    async def _persist_input_messages_before_stream(
-        *,
-        conversation_id: str,
-        user_id: int,
-        forwarded_props: AIChatForwardedPropsParam,
-        prompt: str,
-        payload_messages: list[dict[str, Any]],
-    ) -> None:
-        """
-        预提交当前轮用户输入
-
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :param forwarded_props: 聊天扩展参数
-        :param prompt: 当前轮用户输入文本
-        :param payload_messages: 待落库消息
-        :return:
-        """
-        async with async_db_session.begin() as session:
-            conversation = await ai_conversation_service.get_owned_conversation(
-                db=session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                must_exist=False,
-            )
-            if conversation:
-                await ai_conversation_dao.update(
-                    session,
-                    conversation.id,
-                    UpdateAIConversationParam(
-                        conversation_id=conversation.conversation_id,
-                        title=conversation.title,
-                        provider_id=forwarded_props.provider_id,
-                        model_id=forwarded_props.model_id,
-                        user_id=conversation.user_id,
-                        pinned_time=conversation.pinned_time,
-                        context_start_message_id=conversation.context_start_message_id,
-                        context_cleared_time=conversation.context_cleared_time,
-                    ),
-                )
-            else:
-                await ai_conversation_dao.create(
-                    session,
-                    CreateAIConversationParam(
-                        conversation_id=conversation_id,
-                        title=normalize_generated_conversation_title(title=prompt),
-                        provider_id=forwarded_props.provider_id,
-                        model_id=forwarded_props.model_id,
-                        user_id=user_id,
-                    ),
-                )
-
-            message_rows = await ai_message_dao.get_all(session, conversation_id)
-            await ai_message_dao.bulk_create(
-                session,
-                [
-                    {
-                        'conversation_id': conversation_id,
-                        'provider_id': forwarded_props.provider_id,
-                        'model_id': forwarded_props.model_id,
-                        'message_index': len(message_rows) + index,
-                        'message': message,
-                    }
-                    for index, message in enumerate(payload_messages)
-                ],
-            )
 
     async def create_completion(
         self,
@@ -153,16 +53,70 @@ class ChatService:
         )
         conversation_id = run_context.conversation_id
         forwarded_props = run_context.forwarded_props
-        prompt = self._extract_prompt(current_message=current_message)
+        if not current_message.parts:
+            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
+        first_part = current_message.parts[0]
+        if not isinstance(first_part, UserPromptPart):
+            raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
+
+        content_items = [first_part.content] if isinstance(first_part.content, str) else first_part.content
+        prompt_parts = [item for item in content_items if isinstance(item, str)]
+        has_binary_input = len(prompt_parts) != len(content_items)
+
+        prompt = ' '.join(' '.join(part.split()) for part in prompt_parts if part.split())
+        if not prompt and not has_binary_input:
+            raise errors.RequestError(msg='当前轮用户消息不能为空')
         payload_messages = to_jsonable_python(current_messages, by_alias=True)
 
-        await self._persist_input_messages_before_stream(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            prompt=prompt,
-            payload_messages=payload_messages,
-        )
+        async with async_db_session.begin() as session:
+            conversation = await ai_conversation_service.get_owned_conversation(
+                db=session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                must_exist=False,
+                for_update=True,
+            )
+            if conversation:
+                await ai_conversation_dao.update(
+                    session,
+                    conversation.id,
+                    UpdateAIConversationParam(
+                        conversation_id=conversation.conversation_id,
+                        title=conversation.title,
+                        provider_id=forwarded_props.provider_id,
+                        model_id=forwarded_props.model_id,
+                        user_id=conversation.user_id,
+                        pinned_time=conversation.pinned_time,
+                        context_start_message_id=conversation.context_start_message_id,
+                        context_cleared_time=conversation.context_cleared_time,
+                    ),
+                )
+            else:
+                await ai_conversation_dao.create(
+                    session,
+                    CreateAIConversationParam(
+                        conversation_id=conversation_id,
+                        title=normalize_generated_conversation_title(title=prompt),
+                        provider_id=forwarded_props.provider_id,
+                        model_id=forwarded_props.model_id,
+                        user_id=user_id,
+                    ),
+                )
+
+            next_message_index = await ai_message_dao.get_next_message_index(session, conversation_id)
+            await ai_message_dao.bulk_create(
+                session,
+                [
+                    {
+                        'conversation_id': conversation_id,
+                        'provider_id': forwarded_props.provider_id,
+                        'model_id': forwarded_props.model_id,
+                        'message_index': next_message_index + index,
+                        'message': message,
+                    }
+                    for index, message in enumerate(payload_messages)
+                ],
+            )
 
         async with async_db_session() as db:
             session, agent = await open_chat_session(db=db, forwarded_props=forwarded_props)
@@ -178,10 +132,8 @@ class ChatService:
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
-            conversation=state.conversation,
             title=state.conversation.title if state.conversation else prompt,
             result_offset=len(message_history),
-            strategy=AppendStrategy(base_message_index=len(state.message_rows)),
         )
 
         return session.stream(

@@ -6,17 +6,15 @@ from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.database.db import async_db_session
+from backend.plugin.ai.chat.persistence import persist_regeneration, persist_regeneration_error_message
 from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import (
-    AppendStrategy,
     ChatConversationState,
     ChatRunContext,
-    CompletionPersistence,
-    InsertBeforeStrategy,
-    ReplaceRangeStrategy,
+    RegenerationPersistence,
 )
 from backend.plugin.ai.model import AIMessage
 from backend.plugin.ai.protocol.base import ChatAgent, ChatProtocolAdapter
@@ -43,28 +41,6 @@ class AIMessageService:
         if message_row_index is None:
             raise errors.NotFoundError(msg='消息不存在')
         return message_row_index
-
-    @staticmethod
-    def _find_next_user_message_index(
-        *,
-        model_messages: list[ModelRequest | ModelResponse],
-        start_index: int,
-    ) -> int | None:
-        """
-        获取后续首条用户消息索引
-
-        :param model_messages: 模型消息列表
-        :param start_index: 起始索引
-        :return:
-        """
-        return next(
-            (
-                index
-                for index in range(start_index, len(model_messages))
-                if is_user_prompt_message(message=model_messages[index])
-            ),
-            None,
-        )
 
     @staticmethod
     async def _prepare_regenerate_context(
@@ -140,35 +116,50 @@ class AIMessageService:
 
         reply_start_index = target_index + 1
         message_history = state.model_messages[state.context_start_index : target_index + 1]
-        has_existing_reply = reply_start_index < len(state.model_messages) and not is_user_prompt_message(
-            message=state.model_messages[reply_start_index]
-        )
-        if has_existing_reply:
-            next_user_message_index = self._find_next_user_message_index(
-                model_messages=state.model_messages,
-                start_index=reply_start_index + 1,
-            )
-            reply_end_index = (
-                next_user_message_index - 1 if next_user_message_index is not None else len(state.model_messages) - 1
-            )
-            strategy = ReplaceRangeStrategy(
-                row_ids=tuple(row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]),
-                start_index=reply_start_index,
-                end_index=reply_end_index,
+        reply_index = None
+        for index in range(reply_start_index, len(state.model_messages)):
+            message = state.model_messages[index]
+            if is_user_prompt_message(message=message):
+                break
+            if isinstance(message, ModelResponse):
+                reply_index = index
+                break
+        if reply_index is not None:
+            persistence = RegenerationPersistence(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                forwarded_props=forwarded_props,
+                result_offset=len(message_history),
+                response_id=state.message_rows[reply_index].id,
             )
         elif reply_start_index < len(state.message_rows):
-            strategy = InsertBeforeStrategy(insert_before_index=reply_start_index, base_message_index=reply_start_index)
+            persistence = RegenerationPersistence(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                forwarded_props=forwarded_props,
+                result_offset=len(message_history),
+                message_index=reply_start_index,
+                insert_before_index=reply_start_index,
+            )
         else:
-            strategy = AppendStrategy(base_message_index=reply_start_index)
-        persistence = CompletionPersistence(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            conversation=state.conversation,
-            title=state.conversation.title,
-            result_offset=len(message_history),
-            strategy=strategy,
-        )
+            persistence = RegenerationPersistence(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                forwarded_props=forwarded_props,
+                result_offset=len(message_history),
+                message_index=reply_start_index,
+            )
+
+        async def on_complete(result) -> None:  # noqa: ANN001
+            async with async_db_session.begin() as db:
+                await persist_regeneration(
+                    db=db,
+                    persistence=persistence,
+                    messages=result.all_messages()[persistence.result_offset :],
+                )
+
+        async def on_run_error(message: str) -> None:
+            await persist_regeneration_error_message(persistence=persistence, error_message=message)
 
         return session.stream(
             user_id=user_id,
@@ -177,7 +168,8 @@ class AIMessageService:
             protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
-            persistence=persistence,
+            on_complete=on_complete,
+            on_run_error=on_run_error,
         )
 
     async def regenerate_from_response_message(
@@ -221,28 +213,25 @@ class AIMessageService:
         if user_message_index is None:
             raise errors.RequestError(msg='未找到对应的用户消息')
 
-        reply_start_index = user_message_index + 1
-        next_user_message_index = self._find_next_user_message_index(
-            model_messages=state.model_messages,
-            start_index=reply_start_index + 1,
-        )
-        reply_end_index = (
-            next_user_message_index - 1 if next_user_message_index is not None else len(state.model_messages) - 1
-        )
         message_history = state.model_messages[state.context_start_index : user_message_index + 1]
-        persistence = CompletionPersistence(
+        persistence = RegenerationPersistence(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
-            conversation=state.conversation,
-            title=state.conversation.title,
             result_offset=len(message_history),
-            strategy=ReplaceRangeStrategy(
-                row_ids=tuple(row.id for row in state.message_rows[reply_start_index : reply_end_index + 1]),
-                start_index=reply_start_index,
-                end_index=reply_end_index,
-            ),
+            response_id=state.message_rows[target_index].id,
         )
+
+        async def on_complete(result) -> None:  # noqa: ANN001
+            async with async_db_session.begin() as db:
+                await persist_regeneration(
+                    db=db,
+                    persistence=persistence,
+                    messages=result.all_messages()[persistence.result_offset :],
+                )
+
+        async def on_run_error(message: str) -> None:
+            await persist_regeneration_error_message(persistence=persistence, error_message=message)
 
         return session.stream(
             user_id=user_id,
@@ -251,7 +240,8 @@ class AIMessageService:
             protocol_adapter=protocol_adapter,
             accept=accept,
             message_history=message_history,
-            persistence=persistence,
+            on_complete=on_complete,
+            on_run_error=on_run_error,
         )
 
     async def update(
@@ -277,6 +267,7 @@ class AIMessageService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
         model_messages = (
@@ -317,6 +308,7 @@ class AIMessageService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         await ai_conversation_dao.update(
             db,
@@ -355,6 +347,7 @@ class AIMessageService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
         target_message_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
@@ -365,9 +358,6 @@ class AIMessageService:
             return await ai_conversation_dao.delete(db, conversation_id, user_id)
 
         await ai_message_dao.delete_message(db, pk)
-        for index, row in enumerate(remaining_message_rows):
-            if row.message_index != index:
-                await ai_message_dao.update(db, row.id, {'message_index': index})
 
         context_start_message_id = conversation.context_start_message_id
         if context_start_message_id == pk:

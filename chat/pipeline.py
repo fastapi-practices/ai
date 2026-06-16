@@ -73,34 +73,8 @@ async def assemble_capabilities(
             has_builtin = has_builtin or result.introduces_builtin_tool
             has_fn_source = has_fn_source or result.introduces_function_tool_source
 
-    _validate_capability_mix(
-        adapter=adapter,
-        has_builtin=has_builtin,
-        has_fn_source=has_fn_source,
-        supports_tools=supports_tools,
-    )
-    return capabilities
-
-
-def _validate_capability_mix(
-    *,
-    adapter: ProviderAdapter,
-    has_builtin: bool,
-    has_fn_source: bool,
-    supports_tools: bool,
-) -> None:
-    """
-    集中校验能力组合的非法配比
-
-    :param adapter: 供应商适配器
-    :param has_builtin: 是否存在内置工具
-    :param has_fn_source: 是否存在函数工具来源
-    :param supports_tools: 模型是否支持函数工具
-    :return:
-    """
-    if not has_fn_source:
-        return
-    if not supports_tools:
+    if has_fn_source and not supports_tools:
         raise errors.RequestError(msg='当前模型不支持函数工具，请关闭 MCP、本地搜索或项目内置工具')
-    if adapter.provider_type == AIProviderType.google and has_builtin:
+    if has_fn_source and adapter.provider_type == AIProviderType.google and has_builtin:
         raise errors.RequestError(msg='Google 模型不支持同时使用内置工具和函数工具，请关闭 MCP 和本地搜索/关闭内置工具')
+    return capabilities

@@ -30,6 +30,7 @@ class AIConversationService:
         conversation_id: str,
         user_id: int,
         must_exist: bool = True,
+        for_update: bool = False,
     ) -> AIConversation | None:
         """
         获取当前用户所属对话
@@ -38,9 +39,14 @@ class AIConversationService:
         :param conversation_id: 对话 ID
         :param user_id: 用户 ID
         :param must_exist: 对话是否必须存在
+        :param for_update: 是否锁定对话行
         :return:
         """
-        conversation = await ai_conversation_dao.get_by_conversation_id(db, conversation_id)
+        conversation = (
+            await ai_conversation_dao.get_by_conversation_id_for_update(db, conversation_id)
+            if for_update
+            else await ai_conversation_dao.get_by_conversation_id(db, conversation_id)
+        )
         if not conversation:
             if must_exist:
                 raise errors.NotFoundError(msg='对话不存在')
@@ -188,6 +194,7 @@ class AIConversationService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         title = normalize_conversation_title(title=obj.title, fallback='')
         if not title:
@@ -217,6 +224,7 @@ class AIConversationService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         return await ai_conversation_dao.update_pinned_time(
             db,
@@ -237,6 +245,7 @@ class AIConversationService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         message_rows = list(await ai_message_dao.get_all(db, conversation_id))
         context_start_message_id = message_rows[-1].id if message_rows else None
@@ -269,6 +278,7 @@ class AIConversationService:
             db=db,
             conversation_id=conversation_id,
             user_id=user_id,
+            for_update=True,
         )
         await ai_message_dao.delete(db, conversation_id)
         return await ai_conversation_dao.delete(db, conversation_id, user_id)

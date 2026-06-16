@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy_crud_plus import CRUDPlus
 
@@ -30,7 +30,12 @@ class CRUDAIMessage(CRUDPlus[AIMessage]):
         :param conversation_id: 对话 ID
         :return:
         """
-        return await self.select_models_order(db, 'message_index', 'asc', conversation_id=conversation_id, deleted=0)
+        stmt = (
+            select(self.model)
+            .where(self.model.conversation_id == conversation_id, self.model.deleted == 0)
+            .order_by(self.model.message_index.asc(), self.model.id.asc())
+        )
+        return (await db.scalars(stmt)).all()
 
     async def get_select(self, conversation_id: str) -> Select:
         """
@@ -39,7 +44,26 @@ class CRUDAIMessage(CRUDPlus[AIMessage]):
         :param conversation_id: 对话 ID
         :return:
         """
-        return await self.select_order('message_index', 'asc', conversation_id=conversation_id, deleted=0)
+        return (
+            select(self.model)
+            .where(self.model.conversation_id == conversation_id, self.model.deleted == 0)
+            .order_by(self.model.message_index.asc(), self.model.id.asc())
+        )
+
+    async def get_next_message_index(self, db: AsyncSession, conversation_id: str) -> int:
+        """
+        获取下一条消息索引
+
+        :param db: 数据库会话
+        :param conversation_id: 对话 ID
+        :return:
+        """
+        stmt = select(func.max(self.model.message_index)).where(
+            self.model.conversation_id == conversation_id,
+            self.model.deleted == 0,
+        )
+        max_message_index = await db.scalar(stmt)
+        return (max_message_index if max_message_index is not None else -1) + 1
 
     async def bulk_create(self, db: AsyncSession, objs: list[dict[str, Any]]) -> None:
         """
@@ -126,36 +150,6 @@ class CRUDAIMessage(CRUDPlus[AIMessage]):
             deleted_at_column='deleted_time',
             deleted_at_factory=timezone.now(),
             id=pk,
-            deleted=0,
-        )
-
-    async def delete_message_index_range(
-        self,
-        db: AsyncSession,
-        conversation_id: str,
-        start_message_index: int,
-        end_message_index: int,
-    ) -> int:
-        """
-        删除指定索引区间内的消息
-
-        :param db: 数据库会话
-        :param conversation_id: 对话 ID
-        :param start_message_index: 起始消息索引
-        :param end_message_index: 结束消息索引
-        :return:
-        """
-        return await self.delete_model_by_column(
-            db,
-            allow_multiple=True,
-            logical_deletion=True,
-            deleted_flag_column='deleted',
-            deleted_flag_value=self.model.id,
-            deleted_at_column='deleted_time',
-            deleted_at_factory=timezone.now(),
-            conversation_id=conversation_id,
-            message_index__ge=start_message_index,
-            message_index__le=end_message_index,
             deleted=0,
         )
 

@@ -123,8 +123,9 @@ class AgentSession:
         protocol_adapter: ChatProtocolAdapter,
         accept: str | None,
         message_history: list[ChatModelMessage],
-        persistence: CompletionPersistence,
+        persistence: CompletionPersistence | None = None,
         on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]] | None = None,
+        on_run_error: Callable[[str], Awaitable[None]] | None = None,
     ) -> StreamingResponse:
         """
         构建协议流式响应；on_finish 自动关闭会话
@@ -135,12 +136,18 @@ class AgentSession:
         :param protocol_adapter: 协议适配器
         :param accept: Accept 请求头
         :param message_history: 消息历史
-        :param persistence: 持久化上下文
+        :param persistence: 普通聊天持久化上下文
         :param on_complete: 自定义完成回调，未提供时默认调用 persist_completion
+        :param on_run_error: 自定义异常回调，未提供时默认调用 persist_error_message
         :return:
         """
+        if on_complete is None and persistence is None:
+            raise RuntimeError('缺少聊天完成回调')
+        if on_run_error is None and persistence is None:
+            raise RuntimeError('缺少聊天异常回调')
 
         async def default_on_complete(result: AgentRunResult[Any]) -> None:
+            assert persistence is not None
             async with async_db_session.begin() as db:
                 await persist_completion(
                     db=db,
@@ -148,7 +155,8 @@ class AgentSession:
                     messages=result.all_messages()[persistence.result_offset :],
                 )
 
-        async def on_run_error(message: str) -> None:
+        async def default_on_run_error(message: str) -> None:
+            assert persistence is not None
             await persist_error_message(persistence=persistence, error_message=message)
 
         async def on_finish() -> None:
@@ -164,6 +172,6 @@ class AgentSession:
             accept=accept,
             message_history=message_history,
             on_complete=on_complete or default_on_complete,
-            on_run_error=on_run_error,
+            on_run_error=on_run_error or default_on_run_error,
             on_finish=on_finish,
         )
