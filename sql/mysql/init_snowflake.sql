@@ -16,3 +16,11 @@ values
 (2147098509659213836, '新增MCP', 'AddAIMcp', null, 0, null, 2, null, 'ai:mcp:add', 1, 0, 1, '', null, 2147098509659213835, now(), null),
 (2147098509659213837, '修改MCP', 'EditAIMcp', null, 0, null, 2, null, 'ai:mcp:edit', 1, 0, 1, '', null, 2147098509659213835, now(), null),
 (2147098509659213838, '删除MCP', 'DeleteAIMcp', null, 0, null, 2, null, 'ai:mcp:del', 1, 0, 1, '', null, 2147098509659213835, now(), null);
+
+-- Text2SQL 数据集（与 init.sql 对齐）
+insert into sys_menu (id, title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
+values
+(2147098509659213840, '数据集', 'AIText2SqlDataset', '/plugins/ai/text2sql', 5, 'mdi:database-search-outline', 1, '/plugins/ai/views/text2sql/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
+(2147098509659213841, '新增数据集', 'AddAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:add', 1, 0, 1, '', null, 2147098509659213840, now(), null),
+(2147098509659213842, '修改数据集', 'EditAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:edit', 1, 0, 1, '', null, 2147098509659213840, now(), null),
+(2147098509659213843, '删除数据集', 'DeleteAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:del', 1, 0, 1, '', null, 2147098509659213840, now(), null);

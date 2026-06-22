@@ -22,6 +22,11 @@ values ('MCP 管理', 'AIMcpManage', '/plugins/ai/mcp', 4, 'simple-icons:modelco
 set @ai_mcp_menu_id = LAST_INSERT_ID();
 
 insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
+values ('数据集', 'AIText2SqlDataset', '/plugins/ai/text2sql', 5, 'mdi:database-search-outline', 1, '/plugins/ai/views/text2sql/index', null, 1, 1, 1, '', null, @ai_menu_id, now(), null);
+
+set @ai_text2sql_menu_id = LAST_INSERT_ID();
+
+insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
 values
 ('新增供应商', 'AddAIProvider', null, 0, null, 2, null, 'ai:provider:add', 1, 0, 1, '', null, @ai_model_service_menu_id, now(), null),
 ('修改供应商', 'EditAIProvider', null, 0, null, 2, null, 'ai:provider:edit', 1, 0, 1, '', null, @ai_model_service_menu_id, now(), null),
@@ -34,4 +39,7 @@ values
 ('删除快捷短语', 'DeleteAIQuickPhrase', null, 0, null, 2, null, 'ai:quick-phrase:del', 1, 0, 1, '', null, @ai_quick_phrase_menu_id, now(), null),
 ('新增MCP', 'AddAIMcp', null, 0, null, 2, null, 'ai:mcp:add', 1, 0, 1, '', null, @ai_mcp_menu_id, now(), null),
 ('修改MCP', 'EditAIMcp', null, 0, null, 2, null, 'ai:mcp:edit', 1, 0, 1, '', null, @ai_mcp_menu_id, now(), null),
-('删除MCP', 'DeleteAIMcp', null, 0, null, 2, null, 'ai:mcp:del', 1, 0, 1, '', null, @ai_mcp_menu_id, now(), null);
+('删除MCP', 'DeleteAIMcp', null, 0, null, 2, null, 'ai:mcp:del', 1, 0, 1, '', null, @ai_mcp_menu_id, now(), null),
+('新增数据集', 'AddAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:add', 1, 0, 1, '', null, @ai_text2sql_menu_id, now(), null),
+('修改数据集', 'EditAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:edit', 1, 0, 1, '', null, @ai_text2sql_menu_id, now(), null),
+('删除数据集', 'DeleteAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:del', 1, 0, 1, '', null, @ai_text2sql_menu_id, now(), null);

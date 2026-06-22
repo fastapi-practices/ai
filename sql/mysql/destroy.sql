@@ -15,7 +15,11 @@ where name in (
     'AIMcpManage',
     'AddAIMcp',
     'EditAIMcp',
-    'DeleteAIMcp'
+    'DeleteAIMcp',
+    'AIText2SqlDataset',
+    'AddAIText2SqlDataset',
+    'EditAIText2SqlDataset',
+    'DeleteAIText2SqlDataset'
 );
 
 delete from sys_menu where name = 'PluginAI';
@@ -26,3 +30,8 @@ drop table if exists ai_quick_phrase;
 drop table if exists ai_model;
 drop table if exists ai_provider;
 drop table if exists ai_mcp;
+
+drop table if exists ai_text2sql_history;
+drop table if exists ai_text2sql_example;
+drop table if exists ai_text2sql_table;
+drop table if exists ai_text2sql_dataset;

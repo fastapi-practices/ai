@@ -26,6 +26,7 @@ class AIChatRuntimeParam(AIChatSchemaBase):
     enable_builtin_tools: bool = Field(default=True, description='是否启用项目内置工具')
     mcp_ids: list[int] | None = Field(default=None, description='启用的 MCP ID 列表')
     web_search: AIWebSearchType = Field(default=AIWebSearchType.off, description='网络搜索模式')
+    text2sql_dataset_id: int | None = Field(default=None, description='Text2SQL 数据集 ID；None 关闭，有值则按该数据集取数')
 
 
 class AIChatModelSettingsParam(AIChatSchemaBase):

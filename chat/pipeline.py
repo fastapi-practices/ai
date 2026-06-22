@@ -13,6 +13,7 @@ from backend.plugin.ai.capabilities.code_mode import build_code_mode_capability
 from backend.plugin.ai.capabilities.image import build_image_generation_capability
 from backend.plugin.ai.capabilities.mcp import build_mcp_capability
 from backend.plugin.ai.capabilities.search import build_search_capabilities
+from backend.plugin.ai.capabilities.text2sql import build_text2sql_capability
 from backend.plugin.ai.capabilities.thinking import build_thinking_capability
 from backend.plugin.ai.dataclasses import CapabilityContext
 from backend.plugin.ai.enums import AIProviderType
@@ -23,6 +24,7 @@ _CAPABILITY_BUILDERS: tuple[CapabilityBuilder, ...] = (
     build_thinking_capability,
     build_mcp_capability,
     build_search_capabilities,
+    build_text2sql_capability,
     build_code_execution_capability,
     build_image_generation_capability,
     build_builtin_toolset_capability,
