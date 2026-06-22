@@ -11,7 +11,7 @@ class McpSchemaBase(SchemaBase):
     """MCP 基础模型"""
 
     name: str = Field(description='MCP 名称')
-    command: str = Field(description='MCP 命令')
+    command: str | None = Field(None, description='MCP 命令')
     type: McpType = Field(McpType.stdio, description='MCP 类型')
     description: str | None = Field(None, description='MCP 描述')
     url: HttpUrl | None = Field(None, description='MCP 端点链接')

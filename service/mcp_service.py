@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.exception import errors
 from backend.common.pagination import paging_data
 from backend.plugin.ai.crud.crud_mcp import mcp_dao
+from backend.plugin.ai.enums import McpType
 from backend.plugin.ai.model import Mcp
 from backend.plugin.ai.schema.mcp import CreateMcpParam, UpdateMcpParam
 from backend.utils.pattern_validate import match_string
@@ -13,6 +14,23 @@ from backend.utils.pattern_validate import match_string
 
 class McpService:
     """MCP 服务类"""
+
+    @staticmethod
+    def _normalize_transport_fields(obj: CreateMcpParam | UpdateMcpParam) -> CreateMcpParam | UpdateMcpParam:
+        command = (obj.command or '').strip()
+        url = str(obj.url).strip() if obj.url else None
+
+        if obj.type == McpType.stdio:
+            if not command:
+                raise errors.RequestError(msg='stdio 类型 MCP 必须填写启动命令')
+            return obj.model_copy(update={'command': command, 'url': None, 'headers': None})
+
+        if obj.type in (McpType.sse, McpType.streamable_http):
+            if not url:
+                raise errors.RequestError(msg='sse/streamable_http 类型 MCP 必须填写 URL')
+            return obj.model_copy(update={'command': '', 'args': None, 'env': None, 'url': url})
+
+        raise errors.RequestError(msg='不支持的 MCP 类型')
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int) -> Mcp:
@@ -62,8 +80,7 @@ class McpService:
         mcp_select = await mcp_dao.get_select(name=name, type=type)
         return await paging_data(db, mcp_select)
 
-    @staticmethod
-    async def create(*, db: AsyncSession, obj: CreateMcpParam) -> None:
+    async def create(self, *, db: AsyncSession, obj: CreateMcpParam) -> None:
         """
         创建 MCP
 
@@ -71,6 +88,7 @@ class McpService:
         :param obj: 创建 MCP 参数
         :return:
         """
+        obj = self._normalize_transport_fields(obj)
         if obj.tool_prefix and not match_string(r'^[A-Za-z0-9_-]+$', obj.tool_prefix):
             raise errors.RequestError(msg='MCP 工具名称前缀仅支持字母、数字、下划线和连字符')
         mcp = await mcp_dao.get_by_name(db, name=obj.name)
@@ -78,8 +96,7 @@ class McpService:
             raise errors.ForbiddenError(msg='MCP 已存在')
         await mcp_dao.create(db, obj)
 
-    @staticmethod
-    async def update(*, db: AsyncSession, pk: int, obj: UpdateMcpParam) -> int:
+    async def update(self, *, db: AsyncSession, pk: int, obj: UpdateMcpParam) -> int:
         """
         更新 MCP
 
@@ -88,6 +105,7 @@ class McpService:
         :param obj: 更新 MCP 参数
         :return:
         """
+        obj = self._normalize_transport_fields(obj)
         if obj.tool_prefix and not match_string(r'^[A-Za-z0-9_-]+$', obj.tool_prefix):
             raise errors.RequestError(msg='MCP 工具名称前缀仅支持字母、数字、下划线和连字符')
         mcp = await mcp_dao.get(db, pk)
