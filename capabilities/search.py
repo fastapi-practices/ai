@@ -1,10 +1,10 @@
 from collections.abc import Sequence
 
-from pydantic_ai import WebFetchTool, WebSearchTool
 from pydantic_ai.capabilities import NativeTool, Toolset
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.common_tools.exa import ExaToolset
 from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.native_tools import WebFetchTool, WebSearchTool
 from pydantic_ai.toolsets import FunctionToolset
 
 from backend.common.exception import errors

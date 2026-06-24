@@ -1,5 +1,5 @@
-from pydantic_ai import ImageGenerationTool
 from pydantic_ai.capabilities import NativeTool
+from pydantic_ai.native_tools import ImageGenerationTool
 
 from backend.common.exception import errors
 from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
