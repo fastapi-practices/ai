@@ -15,7 +15,7 @@ values
 (2147098509659213833, '删除模型', 'DeleteAIModel', null, 0, null, 2, null, 'ai:model:del', 1, 0, 1, '', null, 2147098509659213826, now(), null),
 (2147098509659213834, '快捷短语', 'AIQuickPhraseManage', '/plugins/ai/quick-phrase', 4, 'mdi:lightning-bolt-outline', 1, '/plugins/ai/views/quick-phrase/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
 (2147098509659213835, 'MCP 管理', 'AIMcpManage', '/plugins/ai/mcp', 5, 'simple-icons:modelcontextprotocol', 1, '/plugins/ai/views/mcp/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
-(2147098509659213841, '配置管理', 'AIConfigManage', '/plugins/ai/config', 6, 'codicon:symbol-parameter', 1, '/plugins/config/views/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
+(2147098509659213841, '配置管理', 'AIConfigManage', '/plugins/ai/config', 6, 'codicon:symbol-parameter', 1, '/plugins/ai/views/config/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
 (2147098509659213842, '新增快捷短语', 'AddAIQuickPhrase', null, 0, null, 2, null, 'ai:quick-phrase:add', 1, 0, 1, '', null, 2147098509659213834, now(), null),
 (2147098509659213843, '修改快捷短语', 'EditAIQuickPhrase', null, 0, null, 2, null, 'ai:quick-phrase:edit', 1, 0, 1, '', null, 2147098509659213834, now(), null),
 (2147098509659213844, '删除快捷短语', 'DeleteAIQuickPhrase', null, 0, null, 2, null, 'ai:quick-phrase:del', 1, 0, 1, '', null, 2147098509659213834, now(), null),

@@ -31,7 +31,7 @@ begin
     returning id into ai_mcp_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
-    values ('配置管理', 'AIConfigManage', '/plugins/ai/config', 6, 'codicon:symbol-parameter', 1, '/plugins/config/views/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
+    values ('配置管理', 'AIConfigManage', '/plugins/ai/config', 6, 'codicon:symbol-parameter', 1, '/plugins/ai/views/config/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
     returning id into ai_config_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
