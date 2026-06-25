@@ -20,6 +20,7 @@ from pydantic_ai import Agent, RunContext
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.common.enums import DataBaseType
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.core.conf import settings
@@ -27,8 +28,10 @@ from backend.database.db import async_db_session
 from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
+from backend.plugin.ai.enums import AIDefaultModelScene
 from backend.plugin.ai.model import AIText2SqlHistory, AIText2SqlTable
 from backend.plugin.ai.providers.registry import get_provider_adapter
+from backend.plugin.ai.service.default_model_service import ai_default_model_service
 from backend.plugin.ai.text2sql.exceptions import TableNotAllowedError, UnsafeSqlError
 from backend.plugin.ai.text2sql.guardrails import validate_and_normalize
 from backend.plugin.ai.text2sql.readonly_db import get_readonly_session
@@ -42,10 +45,11 @@ class Text2SqlDeps:
     readonly_session: AsyncSession
     schema: str
     tables: list[tuple[str, str | None]]  # 启用的已选表 (name, 描述)
-    allowlist: set[str]
+    allowlist: set[str]  # 授权的 'schema.table'（小写）
     examples: list[dict[str, str]]
     max_rows: int
     timeout: int
+    dialect: str | None  # sqlglot 方言（mysql/postgres）
 
 
 class Text2SqlResult(BaseModel):
@@ -93,7 +97,8 @@ def _build_agent(model: Any) -> Agent:  # type: ignore[type-arg]
 
     @agent.tool
     async def describe_table(ctx: RunContext[Text2SqlDeps], table_name: str) -> str:
-        if table_name.lower() not in ctx.deps.allowlist:
+        ref = f'{ctx.deps.schema.strip().lower()}.{table_name.strip().lower()}'
+        if ref not in ctx.deps.allowlist:
             return f'表 {table_name} 不在可查询范围内'
         rows = await get_columns(ctx.deps.readonly_session, ctx.deps.schema, table_name)
         lines = [
@@ -105,7 +110,13 @@ def _build_agent(model: Any) -> Agent:  # type: ignore[type-arg]
     @agent.tool
     async def execute_sql(ctx: RunContext[Text2SqlDeps], sql: str) -> str:
         try:
-            safe = validate_and_normalize(sql, allowlist=ctx.deps.allowlist, max_rows=ctx.deps.max_rows)
+            safe = validate_and_normalize(
+                sql,
+                allowlist=ctx.deps.allowlist,
+                max_rows=ctx.deps.max_rows,
+                default_schema=ctx.deps.schema,
+                dialect=ctx.deps.dialect,
+            )
         except (UnsafeSqlError, TableNotAllowedError) as exc:
             return f'校验失败，请改写：{exc}'
         try:
@@ -138,18 +149,17 @@ async def _resolve_model(
     解析 text2sql 使用的供应商与模型
 
     优先使用调用方传入的 provider_id / model_id（例如聊天会话当前选择的模型）；
-    均未传入时回退到 .env 配置的 AI_TEXT2SQL_PROVIDER_ID / AI_TEXT2SQL_MODEL_ID。
+    均未传入时回退到默认模型配置（AIDefaultModelScene.text2sql 场景）。
 
     :param db: 数据库会话
-    :param provider_id: 供应商 ID，缺省回退配置
-    :param model_id: 模型 ID，缺省回退配置
+    :param provider_id: 供应商 ID，缺省回退默认模型配置
+    :param model_id: 模型 ID，缺省回退默认模型配置
     :return: (provider, model)
     """
     if not provider_id or not model_id:
-        provider_id = settings.AI_TEXT2SQL_PROVIDER_ID
-        model_id = settings.AI_TEXT2SQL_MODEL_ID
-    if not provider_id or not model_id:
-        raise errors.RequestError(msg='未配置 Text2SQL 模型，请在 .env 设置 AI_TEXT2SQL_PROVIDER_ID 与 AI_TEXT2SQL_MODEL_ID')
+        default_model = await ai_default_model_service.get(db=db, scene=AIDefaultModelScene.text2sql)
+        provider_id = default_model.provider_id
+        model_id = default_model.model_id
     provider = await ai_provider_dao.get(db, provider_id)
     if not provider or not provider.status:
         raise errors.RequestError(msg='Text2SQL 供应商不可用，请检查供应商状态')
@@ -165,15 +175,31 @@ async def _execute_final(
     sql: str,
     allowlist: set[str],
     max_rows: int,
+    default_schema: str,
+    dialect: str | None,
+    timeout: int,
 ) -> tuple[list[str], list[dict[str, Any]], int]:
     """
     对最终 SQL 再次过护栏并在只读引擎执行，返回列、数据、总行数
 
     :raises UnsafeSqlError: 未通过护栏
     :raises TableNotAllowedError: 越表
+    :raises RequestError: 执行超时（LIMIT 已由护栏钳制，结果集有界）
     """
-    safe = validate_and_normalize(sql, allowlist=allowlist, max_rows=max_rows)
-    result = await readonly_session.execute(sa_text(safe))
+    safe = validate_and_normalize(
+        sql,
+        allowlist=allowlist,
+        max_rows=max_rows,
+        default_schema=default_schema,
+        dialect=dialect,
+    )
+    try:
+        result = await asyncio.wait_for(
+            readonly_session.execute(sa_text(safe)),
+            timeout=timeout,
+        )
+    except TimeoutError as exc:  # noqa: PERF203
+        raise errors.RequestError(msg=f'Text2SQL 查询执行超时（{timeout}s），请简化查询') from exc
     rows = result.mappings().all()
     columns = list(rows[0].keys()) if rows else []
     data = [dict(row) for row in rows[:max_rows]]
@@ -198,18 +224,24 @@ async def run_query(
     :param user_id: 用户 ID
     :param selected_tables: 启用的已选表
     :param examples: 召回的 few-shot 样例
-    :param provider_id: 指定供应商 ID（缺省回退配置）；聊天 capability 传入会话当前模型
-    :param model_id: 指定模型 ID（缺省回退配置）；聊天 capability 传入会话当前模型
+    :param provider_id: 指定供应商 ID（缺省回退默认模型配置）；聊天 capability 传入会话当前模型
+    :param model_id: 指定模型 ID（缺省回退默认模型配置）；聊天 capability 传入会话当前模型
     :return: {sql, summary, columns, rows, row_count, duration_ms, history_id}
     """
+    if not settings.AI_TEXT2SQL_ENABLED:
+        raise errors.ForbiddenError(msg='Text2SQL 未启用（AI_TEXT2SQL_ENABLED=false）')
     if not selected_tables:
         raise errors.RequestError(msg='尚未挑选任何数据表，请先在数据源管理中挑选')
 
     schema = settings.AI_TEXT2SQL_SCHEMA
-    allowlist = {table.table_name.lower() for table in selected_tables}
+    allowlist = {
+        f'{table.schema_name.strip().lower()}.{table.table_name.strip().lower()}'
+        for table in selected_tables
+    }
     tables_info = [(table.table_name, table.custom_desc or table.table_comment) for table in selected_tables]
     max_rows = int(settings.AI_TEXT2SQL_MAX_ROWS)
     timeout = int(settings.AI_TEXT2SQL_TIMEOUT)
+    dialect = 'mysql' if settings.DATABASE_TYPE == DataBaseType.mysql else 'postgres'
 
     provider, model = await _resolve_model(db=db, provider_id=provider_id, model_id=model_id)
     adapter = get_provider_adapter(provider.type)
@@ -239,6 +271,7 @@ async def run_query(
                 examples=examples,
                 max_rows=max_rows,
                 timeout=timeout,
+                dialect=dialect,
             )
             run_result = await agent.run(question, deps=deps)
             final_sql = run_result.output.sql
@@ -248,6 +281,9 @@ async def run_query(
                 sql=final_sql,
                 allowlist=allowlist,
                 max_rows=max_rows,
+                default_schema=schema,
+                dialect=dialect,
+                timeout=timeout,
             )
     except Exception as exc:  # noqa: BLE001
         error_msg = str(exc)

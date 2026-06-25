@@ -4,6 +4,7 @@ from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.common.enums import DataBaseType
+from backend.common.exception import errors
 from backend.common.log import log
 from backend.core.conf import settings
 
@@ -42,9 +43,11 @@ def get_readonly_engine() -> AsyncEngine:
     """
     获取只读引擎
 
-    未配置只读账号时回退主库引擎并告警（此时更依赖服务端 sqlparse 护栏兜底）。
+    fail-closed：未配置只读账号时**拒绝回退主库**——执行 LLM 生成的 SQL 必须落在
+    显式配置、仅 SELECT 权限的只读账号上。主库可写，绝不可作为 Text2SQL 的执行目标。
 
     :return: 只读异步引擎
+    :raises RequestError: 未配置只读账号
     """
     global _readonly_engine, _readonly_session_maker
     if _readonly_engine is not None:
@@ -52,20 +55,20 @@ def get_readonly_engine() -> AsyncEngine:
 
     url = _readonly_url_or_none()
     if url is None:
-        log.warning('AI Text2SQL 未配置只读账号（AI_TEXT2SQL_READONLY_*），回退主库引擎并强制护栏')
-        from backend.database.db import async_engine as main_engine  # noqa: PLC0415
-
-        _readonly_engine = main_engine
-    else:
-        _readonly_engine = create_async_engine(
-            url,
-            future=True,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=3600,
-            pool_pre_ping=True,
+        raise errors.RequestError(
+            msg='AI Text2SQL 未配置只读账号（AI_TEXT2SQL_READONLY_HOST/USER/PASSWORD），'
+            '拒绝执行：执行 LLM 生成的 SQL 必须使用仅 SELECT 权限的只读账号',
         )
+
+    _readonly_engine = create_async_engine(
+        url,
+        future=True,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=3600,
+        pool_pre_ping=True,
+    )
 
     _readonly_session_maker = async_sessionmaker(
         bind=_readonly_engine,

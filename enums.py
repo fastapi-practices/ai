@@ -5,6 +5,7 @@ class AIDefaultModelScene(StrEnum):
     """AI 默认模型场景"""
 
     assistant = 'assistant'
+    text2sql = 'text2sql'
 
 
 class AIProviderType(IntEnum):

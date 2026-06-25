@@ -1,6 +1,8 @@
-"""Text2SQL 安全护栏单测（纯逻辑，无 DB）
+"""Text2SQL 安全护栏单测（纯逻辑，无 DB）。
 
-覆盖：放行普通 SELECT/JOIN/CTE/子查询/已有 LIMIT；拦截非 SELECT、多语句、INTO、越表（含 CTE 体/UNION 内越表）。
+覆盖：放行普通 SELECT/JOIN/CTE/子查询/UNION/已有 LIMIT；拦截非 SELECT、多语句、
+INTO OUTFILE、越表（含命名空间碰撞 mysql.user→user、CTE 体/UNION 内越表）、
+无表侦察（@@hostname/USER()/SLEEP/LOAD_FILE 等）、大 LIMIT 钳制。
 """
 
 import pytest
@@ -8,13 +10,24 @@ import pytest
 from backend.plugin.ai.text2sql.exceptions import TableNotAllowedError, UnsafeSqlError
 from backend.plugin.ai.text2sql.guardrails import validate_and_normalize
 
-ALLOWLIST = {'users', 'orders', 'products'}
+# 白名单按完整 schema.table 给出（小写）；default_schema 用于 SQL 未显式指定 schema 时
+ALLOWLIST = {'public.users', 'public.orders', 'public.products', 'public.user'}
+DEFAULT_SCHEMA = 'public'
 
 
 def _guard(sql: str, **kwargs: object) -> str:
     allowlist = kwargs.get('allowlist', ALLOWLIST)  # type: ignore[arg-type]
     max_rows = kwargs.get('max_rows', 100)  # type: ignore[arg-type]
-    return validate_and_normalize(sql, allowlist=allowlist, max_rows=max_rows)
+    default_schema = kwargs.get('default_schema', DEFAULT_SCHEMA)  # type: ignore[arg-type]
+    return validate_and_normalize(
+        sql,
+        allowlist=allowlist,
+        max_rows=max_rows,
+        default_schema=default_schema,
+    )
+
+
+# ---------------- 放行 ----------------
 
 
 def test_allows_plain_select_injects_limit() -> None:
@@ -42,9 +55,16 @@ def test_allows_subquery_in_from() -> None:
     assert 'LIMIT 100' in sql.upper()
 
 
-def test_preserves_existing_limit() -> None:
+def test_allows_union_of_allowlisted_tables() -> None:
+    sql = _guard('SELECT id FROM users UNION SELECT id FROM orders')
+    assert 'UNION' in sql.upper()
+    assert 'LIMIT 100' in sql.upper()
+
+
+def test_preserves_small_existing_limit() -> None:
     sql = _guard('SELECT * FROM users LIMIT 5')
     assert sql.upper().count('LIMIT') == 1
+    assert 'LIMIT 5' in sql.upper().replace(' ', ' ')
 
 
 def test_accepts_lowercase_select() -> None:
@@ -60,6 +80,9 @@ def test_accepts_multiline_and_comment() -> None:
 def test_uses_custom_max_rows() -> None:
     sql = _guard('SELECT * FROM users', max_rows=42)
     assert 'LIMIT 42' in sql.upper()
+
+
+# ---------------- 拦截：非只读 / 多语句 ----------------
 
 
 @pytest.mark.parametrize(
@@ -85,9 +108,35 @@ def test_blocks_multi_statement() -> None:
         _guard('SELECT * FROM users; DROP TABLE users')
 
 
-def test_blocks_select_into() -> None:
+def test_blocks_select_into_outfile() -> None:
+    # sqlglot 不解析 INTO OUTFILE → fail-closed
     with pytest.raises(UnsafeSqlError):
-        _guard('SELECT * INTO new_tbl FROM users')
+        _guard("SELECT * FROM users INTO OUTFILE '/tmp/x'")
+
+
+def test_blocks_delete_returning_in_subquery() -> None:
+    # PG: SELECT * FROM (DELETE ... RETURNING ...) x —— 子查询内含写操作
+    with pytest.raises(UnsafeSqlError):
+        _guard('SELECT * FROM (DELETE FROM users RETURNING id) x')
+
+
+# ---------------- 拦截：表白名单 / 命名空间碰撞 ----------------
+
+
+def test_blocks_system_table_via_namespace_collision() -> None:
+    # 关键回归：mysql.user 经命名空间剥离不得与白名单内的 public.user 碰撞放行
+    with pytest.raises(TableNotAllowedError):
+        _guard('SELECT authentication_string FROM mysql.user')
+
+
+def test_blocks_information_schema() -> None:
+    with pytest.raises(TableNotAllowedError):
+        _guard('SELECT * FROM information_schema.tables')
+
+
+def test_blocks_non_allowlisted_table() -> None:
+    with pytest.raises(TableNotAllowedError):
+        _guard('SELECT * FROM secrets')
 
 
 def test_blocks_union_exfil_from_non_allowlisted() -> None:
@@ -100,9 +149,62 @@ def test_blocks_non_allowlisted_table_inside_cte() -> None:
         _guard('WITH active AS (SELECT * FROM secrets) SELECT * FROM active')
 
 
-def test_blocks_non_allowlisted_table() -> None:
+def test_explicit_schema_must_match() -> None:
+    # 即使表名在白名单，schema 不是 public 也应拒（default_schema=public）
     with pytest.raises(TableNotAllowedError):
-        _guard('SELECT * FROM secrets')
+        _guard('SELECT * FROM other.users')
+
+
+# ---------------- 拦截：无表侦察 / 危险函数 ----------------
+
+
+@pytest.mark.parametrize(
+    ['sql'],
+    [
+        ['SELECT @@hostname'],
+        ['SELECT @@version'],
+        ['SELECT @@datadir'],
+        ['SELECT USER()'],
+        ['SELECT CURRENT_USER()'],
+        ['SELECT VERSION()'],
+        ['SELECT CONNECTION_ID()'],
+        ['SELECT 1'],
+        ['SELECT 1 + 1'],
+    ],
+)
+def test_blocks_tableless_recon(sql: str) -> None:
+    with pytest.raises(UnsafeSqlError):
+        _guard(sql)
+
+
+def test_blocks_dangerous_func_even_with_table() -> None:
+    # 即便引用了白名单表，危险函数也要拒
+    with pytest.raises(UnsafeSqlError):
+        _guard('SELECT SLEEP(5) FROM users')
+    with pytest.raises(UnsafeSqlError):
+        _guard("SELECT LOAD_FILE('/etc/passwd') FROM users")
+
+
+def test_blocks_user_variable() -> None:
+    with pytest.raises(UnsafeSqlError):
+        _guard('SELECT @x := 1 FROM users')
+
+
+# ---------------- LIMIT 钳制 ----------------
+
+
+def test_clamps_large_limit() -> None:
+    sql = _guard('SELECT * FROM users LIMIT 1000000')
+    assert 'LIMIT 100' in sql.upper()
+    assert '1000000' not in sql
+
+
+def test_keeps_limit_below_cap() -> None:
+    sql = _guard('SELECT * FROM users LIMIT 10')
+    assert 'LIMIT 10' in sql.upper()
+
+
+# ---------------- 其它 ----------------
 
 
 def test_blocks_empty_sql() -> None:

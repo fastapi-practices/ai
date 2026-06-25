@@ -23,6 +23,9 @@ async def build_text2sql_capability(ctx: CapabilityContext) -> CapabilityResult:
     :param ctx: 能力构建上下文
     :return:
     """
+    if not settings.AI_TEXT2SQL_ENABLED:
+        # 总开关关闭时不向 chat 注入工具（/queries 也在 run_query 处拒绝）
+        return CapabilityResult(capability=None)
     dataset_id = ctx.forwarded_props.text2sql_dataset_id
     if not dataset_id:
         return CapabilityResult(capability=None)
