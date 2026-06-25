@@ -1,15 +1,15 @@
-"""Text2SQL 核心引擎（原生 Pydantic AI）。
+"""Text2SQL 核心引擎（单次结构化输出，无工具循环）。
 
-流程：解析已挑选表 + few-shot → 复用供应商适配器建 pydantic-ai 模型 → 构建 Agent
-（system_prompt + list_tables/describe_table/execute_sql 工具，execute_sql 强制过护栏）
-→ 运行得到 {sql, summary} → 对最终 SQL 再次过护栏并在只读引擎执行取数 → 落历史。
+流程：预取已选表列信息 + few-shot → 内联进 system_prompt → 复用供应商适配器建
+pydantic-ai 模型 → 单次 Agent.run 得到 {sql, summary}（Agent 不执行任何 SQL）→
+对最终 SQL 过 sqlglot 护栏并在只读引擎执行取数 → 落历史。
 
-注意：pydantic-ai 为 2.x beta，本模块用稳定的装饰器 API（@agent.system_prompt / @agent.tool），
-规避构造参数命名差异；上线前务必用真实模型跑通一次（见 README/计划）。
+安全边界全部在执行层：Agent 产出的 SQL 不被信任，由 _execute_final 重新过护栏 +
+只读账号执行。如此去掉了原先 bespoke 的 list_tables/describe_table/execute_sql
+工具循环（与插件既有 capability/tool 体系重复），并收紧攻击面（Agent 再也碰不到执行）。
 """
 
 import asyncio
-import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -32,7 +32,6 @@ from backend.plugin.ai.enums import AIDefaultModelScene
 from backend.plugin.ai.model import AIText2SqlHistory, AIText2SqlTable
 from backend.plugin.ai.providers.registry import get_provider_adapter
 from backend.plugin.ai.service.default_model_service import ai_default_model_service
-from backend.plugin.ai.text2sql.exceptions import TableNotAllowedError, UnsafeSqlError
 from backend.plugin.ai.text2sql.guardrails import validate_and_normalize
 from backend.plugin.ai.text2sql.readonly_db import get_readonly_session
 from backend.plugin.ai.text2sql.schema_meta import get_columns
@@ -40,16 +39,12 @@ from backend.plugin.ai.text2sql.schema_meta import get_columns
 
 @dataclass
 class Text2SqlDeps:
-    """Agent 运行依赖"""
+    """Agent 运行依赖（执行层的只读会话/白名单/超时由 _execute_final 持有，不入 Agent）"""
 
-    readonly_session: AsyncSession
     schema: str
-    tables: list[tuple[str, str | None]]  # 启用的已选表 (name, 描述)
-    allowlist: set[str]  # 授权的 'schema.table'（小写）
+    tables_info: list[tuple[str, str | None]]  # 启用的已选表 (name, 描述)
+    columns_map: dict[str, Any]  # table_name -> 列信息（预取，内联进 system_prompt）
     examples: list[dict[str, str]]
-    max_rows: int
-    timeout: int
-    dialect: str | None  # sqlglot 方言（mysql/postgres）
 
 
 class Text2SqlResult(BaseModel):
@@ -60,25 +55,37 @@ class Text2SqlResult(BaseModel):
 
 
 def _build_prompt(deps: Text2SqlDeps) -> str:
-    tables = '\n'.join(f'- {name}：{comment or "（无注释）"}' for name, comment in deps.tables) or '- （无）'
+    blocks = []
+    for name, comment in deps.tables_info:
+        cols = deps.columns_map.get(name) or []
+        col_lines = '\n'.join(
+            f"  - {row['column_name']} {row['column_type']}{' [PK]' if row['is_pk'] else ''}"
+            f"：{row['column_comment'] or ''}"
+            for row in cols
+        ) or '  - （无列信息）'
+        blocks.append(f'- {name}（{comment or "无注释"}）：\n{col_lines}')
+    tables = '\n'.join(blocks) or '- （无）'
     examples = ''
     if deps.examples:
-        blocks = '\n'.join(f'问题：{e["question"]}\nSQL：{e["sql"]}' for e in deps.examples)
-        examples = f'\n\n参考示例：\n{blocks}'
+        ex_blocks = '\n'.join(f'问题：{e["question"]}\nSQL：{e["sql"]}' for e in deps.examples)
+        examples = f'\n\n参考示例：\n{ex_blocks}'
     return (
         '你是 FBA Text2SQL 助手，将用户的自然语言问题转为只读 SQL，并给出结果摘要。\n'
         f'数据库 schema：{deps.schema}\n'
-        f'仅可查询以下表（严禁查询其他表）：\n{tables}{examples}\n\n'
+        f'仅可查询以下表及其列（严禁查询其他表、系统表、信息架构）：\n{tables}{examples}\n\n'
         '规则：\n'
-        '1. 只生成只读 SELECT（禁止 INSERT/UPDATE/DELETE/DDL/多语句/SELECT INTO）。\n'
-        '2. 只查询上面列出的表。\n'
-        '3. 需要列信息时调用 describe_table；验证查询时调用 execute_sql。\n'
-        '4. 若 execute_sql 报错，请根据错误修正 SQL 后重试。\n'
-        '5. 最终输出包含字段：sql（最终 SQL）与 summary（对结果的中文摘要）。'
+        '1. 只生成单条只读 SELECT（禁止 INSERT/UPDATE/DELETE/DDL/多语句/SELECT INTO）。\n'
+        '2. 只查询上面列出的表，按列名与类型构造 SQL。\n'
+        '3. 最终输出包含字段：sql（最终 SQL）与 summary（对结果的中文摘要）。'
     )
 
 
 def _build_agent(model: Any) -> Agent:  # type: ignore[type-arg]
+    """单次结构化输出 Agent：无工具，列信息已内联进 system_prompt。
+
+    Agent 不执行任何 SQL——其产出的 sql 字段会被 _execute_final 重新过护栏 + 只读执行，
+    因此无需（也不应）在此再提供 execute_sql 工具或自纠正循环。
+    """
     agent = Agent(
         model=model,
         deps_type=Text2SqlDeps,
@@ -89,52 +96,6 @@ def _build_agent(model: Any) -> Agent:  # type: ignore[type-arg]
     @agent.system_prompt
     def _system_prompt(ctx: RunContext[Text2SqlDeps]) -> str:
         return _build_prompt(ctx.deps)
-
-    @agent.tool
-    async def list_tables(ctx: RunContext[Text2SqlDeps]) -> str:
-        items = '\n'.join(f'- {name}：{comment or "（无注释）"}' for name, comment in ctx.deps.tables)
-        return f'可查询表：\n{items}'
-
-    @agent.tool
-    async def describe_table(ctx: RunContext[Text2SqlDeps], table_name: str) -> str:
-        ref = f'{ctx.deps.schema.strip().lower()}.{table_name.strip().lower()}'
-        if ref not in ctx.deps.allowlist:
-            return f'表 {table_name} 不在可查询范围内'
-        rows = await get_columns(ctx.deps.readonly_session, ctx.deps.schema, table_name)
-        lines = [
-            f"- {row['column_name']} {row['column_type']}{' [PK]' if row['is_pk'] else ''}：{row['column_comment'] or ''}"
-            for row in rows
-        ]
-        return f'表 {table_name} 列：\n' + '\n'.join(lines)
-
-    @agent.tool
-    async def execute_sql(ctx: RunContext[Text2SqlDeps], sql: str) -> str:
-        try:
-            safe = validate_and_normalize(
-                sql,
-                allowlist=ctx.deps.allowlist,
-                max_rows=ctx.deps.max_rows,
-                default_schema=ctx.deps.schema,
-                dialect=ctx.deps.dialect,
-            )
-        except (UnsafeSqlError, TableNotAllowedError) as exc:
-            return f'校验失败，请改写：{exc}'
-        try:
-            result = await asyncio.wait_for(
-                ctx.deps.readonly_session.execute(sa_text(safe)),
-                timeout=ctx.deps.timeout,
-            )
-        except TimeoutError:
-            return '执行超时，请简化查询'
-        except Exception as exc:  # noqa: BLE001
-            return f'执行失败，请检查 SQL：{exc}'
-        rows = result.mappings().all()
-        columns = list(rows[0].keys()) if rows else []
-        preview = [dict(row) for row in rows[:20]]
-        return (
-            f'列：{columns}\n命中行数：{len(rows)}\n'
-            f'预览（前 {len(preview)} 行）：\n{json.dumps(preview, ensure_ascii=False, default=str)}'
-        )
 
     return agent
 
@@ -263,15 +224,16 @@ async def run_query(
     try:
         agent = _build_agent(session.model)
         async with get_readonly_session() as readonly_session:
+            # 预取列信息内联进 prompt（替代原 describe_table 工具）；Agent 全程不执行任何 SQL
+            columns_map = {
+                table.table_name: await get_columns(readonly_session, schema, table.table_name)
+                for table in selected_tables
+            }
             deps = Text2SqlDeps(
-                readonly_session=readonly_session,
                 schema=schema,
-                tables=tables_info,
-                allowlist=allowlist,
+                tables_info=tables_info,
+                columns_map=columns_map,
                 examples=examples,
-                max_rows=max_rows,
-                timeout=timeout,
-                dialect=dialect,
             )
             run_result = await agent.run(question, deps=deps)
             final_sql = run_result.output.sql
