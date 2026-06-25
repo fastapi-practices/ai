@@ -11,6 +11,7 @@ from backend.common.enums import StatusType
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.common.pagination import cursor_paging_data
+from backend.plugin.ai.crud.crud_default_model import ai_default_model_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIProviderType
@@ -185,6 +186,7 @@ class AIProviderService:
         :param obj: 供应商 ID 列表
         :return:
         """
+        await ai_default_model_dao.delete_by_providers(db, obj.pks)
         await ai_model_dao.delete_by_providers(db, obj.pks)
         count = await ai_provider_dao.delete(db, obj.pks)
         return count

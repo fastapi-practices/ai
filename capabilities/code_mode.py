@@ -30,6 +30,18 @@ async def build_code_mode_capability(ctx: CapabilityContext) -> CapabilityResult
     if 'all' in code_mode_tools:
         if len(code_mode_tools) > 1:
             raise errors.ServerError(msg='AI_CODE_MODE_TOOLS 配置 all 时不能混用其他工具名称')
-        return CapabilityResult(capability=CodeMode(tools='all'))
+        return CapabilityResult(
+            capability=CodeMode(
+                tools='all',
+                max_retries=settings.AI_CODE_MODE_MAX_RETRIES,
+                dynamic_catalog=settings.AI_CODE_MODE_DYNAMIC_CATALOG,
+            )
+        )
 
-    return CapabilityResult(capability=CodeMode(tools=code_mode_tools))
+    return CapabilityResult(
+        capability=CodeMode(
+            tools=code_mode_tools,
+            max_retries=settings.AI_CODE_MODE_MAX_RETRIES,
+            dynamic_catalog=settings.AI_CODE_MODE_DYNAMIC_CATALOG,
+        )
+    )

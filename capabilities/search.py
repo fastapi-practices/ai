@@ -1,19 +1,20 @@
 from collections.abc import Sequence
 
-from pydantic_ai import WebFetchTool, WebSearchTool
 from pydantic_ai.capabilities import NativeTool, Toolset
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.common_tools.exa import ExaToolset
 from pydantic_ai.common_tools.tavily import tavily_search_tool
+from pydantic_ai.native_tools import WebFetchTool, WebSearchTool
 from pydantic_ai.toolsets import FunctionToolset
 
 from backend.common.exception import errors
 from backend.core.conf import settings
 from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType, AIWebSearchType
+from backend.utils.dynamic_config import load_ai_config
 
 
-async def build_search_capabilities(ctx: CapabilityContext) -> Sequence[CapabilityResult]:  # noqa: RUF029
+async def build_search_capabilities(ctx: CapabilityContext) -> Sequence[CapabilityResult]:
     """
     构建联网搜索能力
 
@@ -44,6 +45,7 @@ async def build_search_capabilities(ctx: CapabilityContext) -> Sequence[Capabili
                 )
             results.append(CapabilityResult(capability=NativeTool(WebSearchTool()), introduces_builtin_tool=True))
         case AIWebSearchType.exa:
+            await load_ai_config(ctx.db)
             if not settings.AI_EXA_API_KEY:
                 raise errors.RequestError(msg='未配置 AI_EXA_API_KEY，无法启用 Exa 搜索')
             results.append(
@@ -53,6 +55,7 @@ async def build_search_capabilities(ctx: CapabilityContext) -> Sequence[Capabili
                 )
             )
         case AIWebSearchType.tavily:
+            await load_ai_config(ctx.db)
             if not settings.AI_TAVILY_API_KEY:
                 raise errors.RequestError(msg='未配置 AI_TAVILY_API_KEY，无法启用 Tavily 搜索')
             results.append(

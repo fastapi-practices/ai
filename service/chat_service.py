@@ -8,7 +8,7 @@ from backend.database.db import async_db_session
 from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import CompletionPersistence
+from backend.plugin.ai.dataclasses import CompletionPersistenceContext
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
 from backend.plugin.ai.schema.chat import AIChatCompletionParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
@@ -19,8 +19,8 @@ from backend.plugin.ai.utils.conversation_control import normalize_generated_con
 class ChatService:
     """聊天服务"""
 
+    @staticmethod
     async def create_completion(
-        self,
         *,
         user_id: int,
         obj: AIChatCompletionParam,
@@ -128,7 +128,7 @@ class ChatService:
                 require_messages=True,
             )
         message_history = state.model_messages[state.context_start_index :]
-        persistence = CompletionPersistence(
+        persistence = CompletionPersistenceContext(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,

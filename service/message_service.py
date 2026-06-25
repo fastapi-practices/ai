@@ -14,7 +14,7 @@ from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import (
     ChatConversationState,
     ChatRunContext,
-    RegenerationPersistence,
+    RegenerationPersistenceContext,
 )
 from backend.plugin.ai.model import AIMessage
 from backend.plugin.ai.protocol.base import ChatAgent, ChatProtocolAdapter
@@ -41,6 +41,36 @@ class AIMessageService:
         if message_row_index is None:
             raise errors.NotFoundError(msg='消息不存在')
         return message_row_index
+
+    @staticmethod
+    def _get_reply_segment_indexes(
+        *,
+        message_rows: list[AIMessage],
+        model_messages: list[ModelRequest | ModelResponse],
+        reply_start_index: int,
+    ) -> tuple[int | None, int | None, int | None]:
+        """
+        获取回复段的消息索引范围
+
+        :param message_rows: 消息行列表
+        :param model_messages: 模型消息列表
+        :param reply_start_index: 回复段起始行索引
+        :return:
+        """
+        if reply_start_index >= len(message_rows):
+            return None, None, None
+        if is_user_prompt_message(message=model_messages[reply_start_index]):
+            return None, None, message_rows[reply_start_index].message_index
+        reply_end_index = reply_start_index
+        for index in range(reply_start_index + 1, len(model_messages)):
+            if is_user_prompt_message(message=model_messages[index]):
+                break
+            reply_end_index = index
+        return (
+            message_rows[reply_start_index].message_index,
+            message_rows[reply_end_index].message_index,
+            None,
+        )
 
     @staticmethod
     async def _prepare_regenerate_context(
@@ -116,38 +146,34 @@ class AIMessageService:
 
         reply_start_index = target_index + 1
         message_history = state.model_messages[state.context_start_index : target_index + 1]
-        reply_index = None
-        for index in range(reply_start_index, len(state.model_messages)):
-            message = state.model_messages[index]
-            if is_user_prompt_message(message=message):
-                break
-            if isinstance(message, ModelResponse):
-                reply_index = index
-                break
-        if reply_index is not None:
-            persistence = RegenerationPersistence(
+        replace_start_index, replace_end_index, insert_before_index = self._get_reply_segment_indexes(
+            message_rows=state.message_rows,
+            model_messages=state.model_messages,
+            reply_start_index=reply_start_index,
+        )
+        if replace_start_index is not None:
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
                 result_offset=len(message_history),
-                response_id=state.message_rows[reply_index].id,
+                replace_start_index=replace_start_index,
+                replace_end_index=replace_end_index,
             )
-        elif reply_start_index < len(state.message_rows):
-            persistence = RegenerationPersistence(
+        elif insert_before_index is not None:
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
                 result_offset=len(message_history),
-                message_index=reply_start_index,
-                insert_before_index=reply_start_index,
+                insert_before_index=insert_before_index,
             )
         else:
-            persistence = RegenerationPersistence(
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
                 result_offset=len(message_history),
-                message_index=reply_start_index,
             )
 
         async def on_complete(result) -> None:  # noqa: ANN001
@@ -214,12 +240,20 @@ class AIMessageService:
             raise errors.RequestError(msg='未找到对应的用户消息')
 
         message_history = state.model_messages[state.context_start_index : user_message_index + 1]
-        persistence = RegenerationPersistence(
+        replace_start_index, replace_end_index, _ = self._get_reply_segment_indexes(
+            message_rows=state.message_rows,
+            model_messages=state.model_messages,
+            reply_start_index=user_message_index + 1,
+        )
+        if replace_start_index is None:
+            raise errors.RequestError(msg='未找到对应的 AI 回复段')
+        persistence = RegenerationPersistenceContext(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,
             result_offset=len(message_history),
-            response_id=state.message_rows[target_index].id,
+            replace_start_index=replace_start_index,
+            replace_end_index=replace_end_index,
         )
 
         async def on_complete(result) -> None:  # noqa: ANN001

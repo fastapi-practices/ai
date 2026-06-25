@@ -65,7 +65,6 @@ async def assemble_capabilities(
             supported_native_tools=supported_native_tools,
             supports_image_output=supports_image_output,
             has_builtin_tools=has_builtin,
-            has_function_tool_sources=has_fn_source,
         )
         outcomes = await builder(ctx)
         normalized: Sequence[Any] = outcomes if isinstance(outcomes, Sequence) else (outcomes,)

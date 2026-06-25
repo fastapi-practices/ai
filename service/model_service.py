@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.common.enums import StatusType
 from backend.common.exception import errors
 from backend.common.pagination import paging_data
+from backend.plugin.ai.crud.crud_default_model import ai_default_model_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIProviderType
@@ -81,6 +82,9 @@ class AIModelService:
             raise errors.NotFoundError(msg='供应商不存在')
         if provider.type == AIProviderType.openrouter and '/' not in obj.model_id:
             raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
+        ai_model = await ai_model_dao.get_by_model_and_provider(db, obj.model_id, obj.provider_id)
+        if ai_model:
+            raise errors.ConflictError(msg='模型已存在')
         await ai_model_dao.create(db, obj)
 
     @staticmethod
@@ -108,7 +112,7 @@ class AIModelService:
 
         existed_models = await ai_model_dao.get_by_provider_model_pairs(db, pairs)
         if existed_models:
-            raise errors.RequestError(msg='存在已添加的模型，请勿重复创建')
+            raise errors.ConflictError(msg='存在已添加的模型，请勿重复创建')
 
         await ai_model_dao.bulk_create(db, [item.model_dump() for item in obj.items])
 
@@ -130,6 +134,9 @@ class AIModelService:
             raise errors.NotFoundError(msg='供应商不存在')
         if provider.type == AIProviderType.openrouter and '/' not in obj.model_id:
             raise errors.RequestError(msg='OpenRouter 模型 ID 必须包含供应商前缀，例如 openai/gpt-4o-mini')
+        existed_model = await ai_model_dao.get_by_model_and_provider(db, obj.model_id, obj.provider_id)
+        if existed_model and existed_model.id != pk:
+            raise errors.ConflictError(msg='模型已存在')
         return await ai_model_dao.update(db, pk, obj)
 
     @staticmethod
@@ -141,6 +148,11 @@ class AIModelService:
         :param obj: 模型 ID 列表
         :return:
         """
+        ai_models = await ai_model_dao.get_by_ids(db, obj.pks)
+        await ai_default_model_dao.delete_by_provider_model_pairs(
+            db,
+            [(ai_model.provider_id, ai_model.model_id) for ai_model in ai_models],
+        )
         count = await ai_model_dao.delete(db, obj.pks)
         return count
 

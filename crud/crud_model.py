@@ -70,6 +70,18 @@ class CRUDAIModel(CRUDPlus[AIModel]):
 
         return await self.select_models(db, **filters)
 
+    async def get_by_ids(self, db: AsyncSession, pks: list[int]) -> Sequence[AIModel]:
+        """
+        批量获取模型
+
+        :param db: 数据库会话
+        :param pks: 模型 ID 列表
+        :return:
+        """
+        if not pks:
+            return []
+        return await self.select_models(db, id__in=pks, deleted=0)
+
     async def get_by_provider_model_pairs(self, db: AsyncSession, pairs: list[tuple[int, str]]) -> Sequence[AIModel]:
         """
         批量获取已存在的模型

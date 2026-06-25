@@ -1,5 +1,5 @@
-from pydantic_ai import CodeExecutionTool
 from pydantic_ai.capabilities import NativeTool
+from pydantic_ai.native_tools import CodeExecutionTool
 
 from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType

@@ -1,16 +1,19 @@
 [plugin]
 summary = "AI"
-version = "0.2.0"
+version = "0.3.0"
 description = "为系统提供 AI 赋能（含 Text2SQL 自然语言查库）"
 author = "wu-clan"
 tags = ["agent", "ai", "mcp"]
 database = ["mysql", "postgresql"]
+depends_on = ["config"]
 
 [app]
 router = ["v1"]
 
 [settings]
 AI_CODE_MODE_TOOLS = []
+AI_CODE_MODE_MAX_RETRIES = 3
+AI_CODE_MODE_DYNAMIC_CATALOG = false
 AI_HTTP_MAX_RETRIES = 5
 AI_MCP_MAX_RETRIES = 1
 # [ Web Search ]

@@ -1,6 +1,12 @@
 from backend.common.enums import IntEnum, StrEnum
 
 
+class AIDefaultModelScene(StrEnum):
+    """AI 默认模型场景"""
+
+    assistant = 'assistant'
+
+
 class AIProviderType(IntEnum):
     """AI 供应商类型"""
 

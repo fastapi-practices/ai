@@ -134,6 +134,46 @@ class CRUDAIMessage(CRUDPlus[AIMessage]):
         """
         return await self.update_model_by_column(db, obj, id=pk, deleted=0)
 
+    async def delete_message_index_range(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+        start_message_index: int,
+        end_message_index: int,
+    ) -> int:
+        """
+        按消息索引范围逻辑删除消息
+
+        :param db: 数据库会话
+        :param conversation_id: 对话 ID
+        :param start_message_index: 起始消息索引
+        :param end_message_index: 结束消息索引
+        :return:
+        """
+        messages = await self.select_models_order(
+            db,
+            'message_index',
+            'asc',
+            conversation_id=conversation_id,
+            message_index__ge=start_message_index,
+            message_index__le=end_message_index,
+            deleted=0,
+        )
+        if not messages:
+            return 0
+        deleted_time = timezone.now()
+        return await self.bulk_update_models(
+            db,
+            [
+                {
+                    'id': message.id,
+                    'deleted': message.id,
+                    'deleted_time': deleted_time,
+                }
+                for message in messages
+            ],
+        )
+
     async def delete_message(self, db: AsyncSession, pk: int) -> int:
         """
         删除指定消息
