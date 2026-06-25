@@ -49,7 +49,6 @@ class CapabilityContext:
     supported_native_tools: frozenset[type[AbstractNativeTool]]
     supports_image_output: bool
     has_builtin_tools: bool
-    has_function_tool_sources: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +61,7 @@ class CapabilityResult:
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionPersistence:
+class CompletionPersistenceContext:
     """普通聊天完成持久化上下文"""
 
     conversation_id: str
@@ -73,15 +72,13 @@ class CompletionPersistence:
 
 
 @dataclass(frozen=True, slots=True)
-class RegenerationPersistence:
+class RegenerationPersistenceContext:
     """重生成完成持久化上下文"""
 
     conversation_id: str
     user_id: int
     forwarded_props: AIChatForwardedPropsParam
     result_offset: int
-    response_id: int | None = None
-    message_index: int | None = None
     insert_before_index: int | None = None
     replace_start_index: int | None = None
     replace_end_index: int | None = None

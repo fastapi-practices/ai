@@ -13,7 +13,7 @@ from backend.database.db import async_db_session
 from backend.plugin.ai.chat.builder import build_model_settings
 from backend.plugin.ai.chat.persistence import persist_completion, persist_error_message
 from backend.plugin.ai.chat.pipeline import assemble_capabilities
-from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatRunContext, CompletionPersistence
+from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatRunContext, CompletionPersistenceContext
 from backend.plugin.ai.enums import AIChatGenerationType
 from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage, ChatProtocolAdapter
 from backend.plugin.ai.providers.base import ProviderAdapter
@@ -105,7 +105,7 @@ class AgentSession:
         )
         model_settings = build_model_settings(adapter=self.adapter, forwarded_props=forwarded_props)
         output_type: Any = [BinaryImage, str] if forwarded_props.generation_type == AIChatGenerationType.image else str
-        return Agent(
+        return Agent(  # type: ignore
             name='fba-chat',
             deps_type=ChatAgentDeps,
             model=self.model,
@@ -123,7 +123,7 @@ class AgentSession:
         protocol_adapter: ChatProtocolAdapter,
         accept: str | None,
         message_history: list[ChatModelMessage],
-        persistence: CompletionPersistence | None = None,
+        persistence: CompletionPersistenceContext | None = None,
         on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]] | None = None,
         on_run_error: Callable[[str], Awaitable[None]] | None = None,
     ) -> StreamingResponse:

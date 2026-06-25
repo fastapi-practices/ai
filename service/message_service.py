@@ -14,7 +14,7 @@ from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import (
     ChatConversationState,
     ChatRunContext,
-    RegenerationPersistence,
+    RegenerationPersistenceContext,
 )
 from backend.plugin.ai.model import AIMessage
 from backend.plugin.ai.protocol.base import ChatAgent, ChatProtocolAdapter
@@ -152,7 +152,7 @@ class AIMessageService:
             reply_start_index=reply_start_index,
         )
         if replace_start_index is not None:
-            persistence = RegenerationPersistence(
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
@@ -161,16 +161,15 @@ class AIMessageService:
                 replace_end_index=replace_end_index,
             )
         elif insert_before_index is not None:
-            persistence = RegenerationPersistence(
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
                 result_offset=len(message_history),
-                message_index=insert_before_index,
                 insert_before_index=insert_before_index,
             )
         else:
-            persistence = RegenerationPersistence(
+            persistence = RegenerationPersistenceContext(
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
@@ -248,7 +247,7 @@ class AIMessageService:
         )
         if replace_start_index is None:
             raise errors.RequestError(msg='未找到对应的 AI 回复段')
-        persistence = RegenerationPersistence(
+        persistence = RegenerationPersistenceContext(
             conversation_id=conversation_id,
             user_id=user_id,
             forwarded_props=forwarded_props,

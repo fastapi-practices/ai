@@ -7,7 +7,7 @@ from backend.common.log import log
 from backend.database.db import async_db_session
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import CompletionPersistence, RegenerationPersistence
+from backend.plugin.ai.dataclasses import CompletionPersistenceContext, RegenerationPersistenceContext
 from backend.plugin.ai.protocol.base import ChatModelMessage
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
@@ -16,7 +16,7 @@ from backend.plugin.ai.utils.conversation_control import normalize_generated_con
 async def persist_completion(
     *,
     db: AsyncSession,
-    persistence: CompletionPersistence,
+    persistence: CompletionPersistenceContext,
     messages: list[ChatModelMessage],
 ) -> None:
     """
@@ -82,7 +82,7 @@ async def persist_completion(
 async def persist_regeneration(
     *,
     db: AsyncSession,
-    persistence: RegenerationPersistence,
+    persistence: RegenerationPersistenceContext,
     messages: list[ChatModelMessage],
 ) -> None:
     """
@@ -105,7 +105,6 @@ async def persist_regeneration(
     if not conversation or conversation.user_id != persistence.user_id:
         raise errors.NotFoundError(msg='对话不存在')
 
-    message_index = persistence.message_index
     if persistence.replace_start_index is not None:
         replace_end_index = (
             persistence.replace_end_index
@@ -135,8 +134,8 @@ async def persist_regeneration(
             persistence.insert_before_index,
             len(payload_messages),
         )
-        message_index = message_index or persistence.insert_before_index
-    if message_index is None:
+        message_index = persistence.insert_before_index
+    else:
         message_index = await ai_message_dao.get_next_message_index(db, persistence.conversation_id)
 
     await ai_message_dao.bulk_create(
@@ -156,7 +155,7 @@ async def persist_regeneration(
 
 async def persist_error_message(
     *,
-    persistence: CompletionPersistence,
+    persistence: CompletionPersistenceContext,
     error_message: str,
 ) -> None:
     """
@@ -182,7 +181,7 @@ async def persist_error_message(
 
 async def persist_regeneration_error_message(
     *,
-    persistence: RegenerationPersistence,
+    persistence: RegenerationPersistenceContext,
     error_message: str,
 ) -> None:
     """
