@@ -4,3 +4,5 @@ __pycache__/
 .cursor/
 .claude/
 .DS_Store
+
+.omc/

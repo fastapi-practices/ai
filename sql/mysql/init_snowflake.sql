@@ -29,3 +29,11 @@ values
 (2147098509659213846, '状态', 'AI', 'AI_CONFIG_STATUS', '1', false, null, now(), null),
 (2147098509659213847, 'Exa API Key', 'AI', 'AI_EXA_API_KEY', '', false, '用于 AI 联网搜索的 Exa API Key', now(), null),
 (2147098509659213848, 'Tavily API Key', 'AI', 'AI_TAVILY_API_KEY', '', false, '用于 AI 联网搜索的 Tavily API Key', now(), null);
+
+-- Text2SQL 数据集（ID 重分配到 849-852，避免与上游 840-848 冲突）
+insert into sys_menu (id, title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
+values
+(2147098509659213849, '数据集', 'AIText2SqlDataset', '/plugins/ai/text2sql', 5, 'mdi:database-search-outline', 1, '/plugins/ai/views/text2sql/index', null, 1, 1, 1, '', null, 2147098509659213824, now(), null),
+(2147098509659213850, '新增数据集', 'AddAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:add', 1, 0, 1, '', null, 2147098509659213849, now(), null),
+(2147098509659213851, '修改数据集', 'EditAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:edit', 1, 0, 1, '', null, 2147098509659213849, now(), null),
+(2147098509659213852, '删除数据集', 'DeleteAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:del', 1, 0, 1, '', null, 2147098509659213849, now(), null);

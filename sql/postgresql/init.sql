@@ -5,6 +5,7 @@ declare
     ai_model_service_menu_id bigint;
     ai_quick_phrase_menu_id bigint;
     ai_mcp_menu_id bigint;
+    ai_text2sql_menu_id bigint;
     ai_config_menu_id bigint;
 begin
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
@@ -31,6 +32,10 @@ begin
     returning id into ai_mcp_menu_id;
 
     insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
+    values ('数据集', 'AIText2SqlDataset', '/plugins/ai/text2sql', 5, 'mdi:database-search-outline', 1, '/plugins/ai/views/text2sql/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
+    returning id into ai_text2sql_menu_id;
+
+    insert into sys_menu (title, name, path, sort, icon, type, component, perms, status, display, cache, link, remark, parent_id, created_time, updated_time)
     values ('配置管理', 'AIConfigManage', '/plugins/ai/config', 6, 'codicon:symbol-parameter', 1, '/plugins/ai/views/config/index', null, 1, 1, 1, '', null, ai_menu_id, now(), null)
     returning id into ai_config_menu_id;
 
@@ -49,6 +54,9 @@ begin
     ('新增MCP', 'AddAIMcp', null, 0, null, 2, null, 'ai:mcp:add', 1, 0, 1, '', null, ai_mcp_menu_id, now(), null),
     ('修改MCP', 'EditAIMcp', null, 0, null, 2, null, 'ai:mcp:edit', 1, 0, 1, '', null, ai_mcp_menu_id, now(), null),
     ('删除MCP', 'DeleteAIMcp', null, 0, null, 2, null, 'ai:mcp:del', 1, 0, 1, '', null, ai_mcp_menu_id, now(), null),
+    ('新增数据集', 'AddAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:add', 1, 0, 1, '', null, ai_text2sql_menu_id, now(), null),
+    ('修改数据集', 'EditAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:edit', 1, 0, 1, '', null, ai_text2sql_menu_id, now(), null),
+    ('删除数据集', 'DeleteAIText2SqlDataset', null, 0, null, 2, null, 'ai:text2sql:dataset:del', 1, 0, 1, '', null, ai_text2sql_menu_id, now(), null),
     ('保存配置', 'EditAIConfig', null, 0, null, 2, null, 'sys.config.edits', 1, 0, 1, '', null, ai_config_menu_id, now(), null);
 end $$;
 

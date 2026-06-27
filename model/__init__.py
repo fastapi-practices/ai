@@ -5,3 +5,7 @@ from backend.plugin.ai.model.message import AIMessage as AIMessage
 from backend.plugin.ai.model.model import AIModel as AIModel
 from backend.plugin.ai.model.provider import AIProvider as AIProvider
 from backend.plugin.ai.model.quick_phrase import AIQuickPhrase as AIQuickPhrase
+from backend.plugin.ai.model.text2sql import AIText2SqlDataset as AIText2SqlDataset
+from backend.plugin.ai.model.text2sql import AIText2SqlExample as AIText2SqlExample
+from backend.plugin.ai.model.text2sql import AIText2SqlHistory as AIText2SqlHistory
+from backend.plugin.ai.model.text2sql import AIText2SqlTable as AIText2SqlTable

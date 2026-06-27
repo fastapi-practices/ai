@@ -2,7 +2,7 @@
 icon = "https://wu-clan.github.io/picx-images-hosting/logo/fba.svg"
 summary = "AI"
 version = "0.3.0"
-description = "为系统提供 AI 赋能"
+description = "为系统提供 AI 赋能（含 Text2SQL 自然语言查库）"
 author = "wu-clan"
 tags = ["agent", "ai", "mcp"]
 database = ["mysql", "postgresql"]
@@ -17,3 +17,16 @@ AI_CODE_MODE_MAX_RETRIES = 3
 AI_CODE_MODE_DYNAMIC_CATALOG = false
 AI_HTTP_MAX_RETRIES = 5
 AI_MCP_MAX_RETRIES = 1
+# [ Web Search ]
+AI_EXA_API_KEY = ""
+AI_TAVILY_API_KEY = ""
+# [ Text2SQL ]
+AI_TEXT2SQL_ENABLED = false
+AI_TEXT2SQL_SCHEMA = "fba"
+AI_TEXT2SQL_MAX_ROWS = 200
+AI_TEXT2SQL_TIMEOUT = 15
+AI_TEXT2SQL_MAX_RETRIES = 2
+AI_TEXT2SQL_READONLY_HOST = ""
+AI_TEXT2SQL_READONLY_PORT = 0
+AI_TEXT2SQL_READONLY_USER = ""
+AI_TEXT2SQL_READONLY_PASSWORD = ""

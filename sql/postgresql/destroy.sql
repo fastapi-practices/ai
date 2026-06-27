@@ -18,6 +18,10 @@ where name in (
     'AddAIMcp',
     'EditAIMcp',
     'DeleteAIMcp',
+    'AIText2SqlDataset',
+    'AddAIText2SqlDataset',
+    'EditAIText2SqlDataset',
+    'DeleteAIText2SqlDataset',
     'AIConfigManage',
     'EditAIConfig'
 );
@@ -38,5 +42,10 @@ drop table if exists ai_default_model;
 drop table if exists ai_model;
 drop table if exists ai_provider;
 drop table if exists ai_mcp;
+
+drop table if exists ai_text2sql_history;
+drop table if exists ai_text2sql_example;
+drop table if exists ai_text2sql_table;
+drop table if exists ai_text2sql_dataset;
 
 select setval(pg_get_serial_sequence('sys_menu', 'id'), coalesce(max(id), 0) + 1, true) from sys_menu;
