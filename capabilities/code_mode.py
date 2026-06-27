@@ -35,7 +35,8 @@ async def build_code_mode_capability(ctx: CapabilityContext) -> CapabilityResult
                 tools='all',
                 max_retries=settings.AI_CODE_MODE_MAX_RETRIES,
                 dynamic_catalog=settings.AI_CODE_MODE_DYNAMIC_CATALOG,
-            )
+            ),
+            introduces_function_tool_source=True,
         )
 
     return CapabilityResult(
@@ -43,5 +44,6 @@ async def build_code_mode_capability(ctx: CapabilityContext) -> CapabilityResult
             tools=code_mode_tools,
             max_retries=settings.AI_CODE_MODE_MAX_RETRIES,
             dynamic_catalog=settings.AI_CODE_MODE_DYNAMIC_CATALOG,
-        )
+        ),
+        introduces_function_tool_source=True,
     )

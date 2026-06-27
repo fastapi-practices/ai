@@ -41,7 +41,7 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         if status is not None:
             filters['status'] = status
 
-        return await self.select_order('id', 'desc', **filters)
+        return await self.select_order('id', 'asc', **filters)
 
     async def get_all(self, db: AsyncSession) -> Sequence[AIProvider]:
         """
@@ -50,7 +50,7 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param db: 数据库会话
         :return:
         """
-        return await self.select_models(db, status=StatusType.enable.value, deleted=0)
+        return await self.select_models_order(db, 'id', 'asc', status=StatusType.enable.value, deleted=0)
 
     async def create(self, db: AsyncSession, obj: CreateAIProviderParam) -> None:
         """

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import ConfigDict, Field, HttpUrl
+from pydantic import ConfigDict, Field, HttpUrl, field_serializer
 
 from backend.common.schema import SchemaBase
 from backend.plugin.ai.enums import McpType
@@ -22,6 +22,11 @@ class McpSchemaBase(SchemaBase):
     read_timeout: float = Field(5 * 60, description='等待新消息的最长时间（秒）')
     tool_prefix: str | None = Field(None, max_length=64, description='MCP 工具名称前缀')
     include_instructions: bool = Field(False, description='是否注入 MCP 服务说明')
+
+    @field_serializer('url')
+    def serialize_url(self, url: HttpUrl | None) -> str | None:
+        """序列化 MCP 端点链接"""
+        return str(url) if url else None
 
 
 class CreateMcpParam(McpSchemaBase):

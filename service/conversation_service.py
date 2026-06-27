@@ -123,7 +123,7 @@ class AIConversationService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        message_rows = await ai_message_dao.get_all_by_message_index(db, conversation.conversation_id)
+        message_rows = await ai_message_dao.get_all(db, conversation.conversation_id)
         model_messages = (
             ModelMessagesTypeAdapter.validate_python([row.message for row in message_rows]) if message_rows else []
         )

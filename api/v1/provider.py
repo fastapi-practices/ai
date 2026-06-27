@@ -74,7 +74,14 @@ async def create_ai_provider(db: CurrentSessionTransaction, obj: CreateAIProvide
     return response_base.success()
 
 
-@router.post('/{pk}/models/sync', summary='同步供应商模型', dependencies=[DependsJwtAuth])
+@router.post(
+    '/{pk}/models/sync',
+    summary='同步供应商模型',
+    dependencies=[
+        Depends(RequestPermission('ai:model:add')),
+        DependsRBAC,
+    ],
+)
 async def sync_ai_provider_models(
     db: CurrentSessionTransaction,
     pk: Annotated[int, Path(description='供应商 ID')],
