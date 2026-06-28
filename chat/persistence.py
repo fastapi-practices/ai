@@ -10,6 +10,7 @@ from backend.database.db import async_db_session
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import CompletionPersistenceContext, RegenerationPersistenceContext
+from backend.plugin.ai.enums import AIMessageStatus
 from backend.plugin.ai.protocol.base import ChatModelMessage
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
@@ -80,6 +81,22 @@ async def persist_completion(
         messages=messages,
         payload_messages=payload_messages,
     )
+    if persistence.assistant_message_id is not None:
+        assistant_records = [record for record in chat_message_records if record['role'] == 'assistant']
+        if not assistant_records:
+            return
+        assistant_record = assistant_records[-1]
+        await ai_message_dao.update(
+            db,
+            persistence.assistant_message_id,
+            {
+                'provider_id': persistence.forwarded_props.provider_id,
+                'model_id': persistence.forwarded_props.model_id,
+                'status': AIMessageStatus.success,
+                **assistant_record,
+            },
+        )
+        return
 
     current = await ai_conversation_dao.get_by_conversation_id_for_update(db, persistence.conversation_id)
     normalized_title = normalize_generated_conversation_title(title=persistence.title)
@@ -225,7 +242,22 @@ async def persist_error_message(
     )
     try:
         async with async_db_session.begin() as db:
-            await persist_completion(db=db, persistence=persistence, messages=[error_response])
+            if persistence.assistant_message_id is not None:
+                payload_messages = to_jsonable_python([error_response], by_alias=True)
+                assert isinstance(payload_messages, list)
+                await ai_message_dao.update(
+                    db,
+                    persistence.assistant_message_id,
+                    {
+                        'provider_id': persistence.forwarded_props.provider_id,
+                        'model_id': persistence.forwarded_props.model_id,
+                        'role': 'assistant',
+                        'status': AIMessageStatus.error,
+                        'model_messages': payload_messages,
+                    },
+                )
+            else:
+                await persist_completion(db=db, persistence=persistence, messages=[error_response])
     except Exception as exc:
         log.exception(f'持久化聊天失败消息异常: {exc}')
     else:

@@ -60,6 +60,14 @@ class AIChatGenerationType(StrEnum):
     image = 'image'
 
 
+class AIMessageStatus(StrEnum):
+    """AI 消息状态"""
+
+    pending = 'pending'
+    success = 'success'
+    error = 'error'
+
+
 class AIWebSearchType(StrEnum):
     """网络搜索模式"""
 

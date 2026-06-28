@@ -9,6 +9,7 @@ from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_sess
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
 from backend.plugin.ai.dataclasses import CompletionPersistenceContext
+from backend.plugin.ai.enums import AIMessageStatus
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
 from backend.plugin.ai.schema.chat import AIChatCompletionParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
@@ -101,6 +102,7 @@ class ChatService:
             payload_messages = to_jsonable_python(current_messages, by_alias=True)
             assert isinstance(payload_messages, list)
             user_message_record = build_chat_message_record(role='user', model_messages=payload_messages)
+            assistant_message_id: int | None = None
             async with async_db_session.begin() as session:
                 conversation = await ai_conversation_service.get_owned_conversation(
                     db=session,
@@ -110,6 +112,8 @@ class ChatService:
                     for_update=True,
                 )
                 if conversation:
+                    if await ai_message_dao.has_pending(session, conversation_id):
+                        raise errors.RequestError(msg='当前对话正在生成，请稍后再试')
                     await ai_conversation_dao.update(
                         session,
                         conversation.id,
@@ -137,19 +141,30 @@ class ChatService:
                     )
 
                 next_message_index = await ai_message_dao.get_next_message_index(session, conversation_id)
-                await ai_message_dao.bulk_create(
+                await ai_message_dao.create(
                     session,
-                    [
-                        {
-                            'conversation_id': conversation_id,
-                            'provider_id': forwarded_props.provider_id,
-                            'model_id': forwarded_props.model_id,
-                            'message_index': next_message_index + index,
-                            **record,
-                        }
-                        for index, record in enumerate([user_message_record])
-                    ],
+                    {
+                        'conversation_id': conversation_id,
+                        'provider_id': forwarded_props.provider_id,
+                        'model_id': forwarded_props.model_id,
+                        'message_index': next_message_index,
+                        'status': AIMessageStatus.success,
+                        **user_message_record,
+                    },
                 )
+                assistant_message = await ai_message_dao.create(
+                    session,
+                    {
+                        'conversation_id': conversation_id,
+                        'provider_id': forwarded_props.provider_id,
+                        'model_id': forwarded_props.model_id,
+                        'message_index': next_message_index + 1,
+                        'role': 'assistant',
+                        'status': AIMessageStatus.pending,
+                        'model_messages': [],
+                    },
+                )
+                assistant_message_id = assistant_message.id
 
             async with async_db_session() as db:
                 state = await ai_conversation_service.get_chat_state(
@@ -170,6 +185,7 @@ class ChatService:
             forwarded_props=forwarded_props,
             title=state.conversation.title if state.conversation else prompt,
             result_offset=len(message_history),
+            assistant_message_id=assistant_message_id,
         )
 
         return agent_session.stream(

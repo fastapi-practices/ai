@@ -70,6 +70,7 @@ class CompletionPersistenceContext:
     forwarded_props: AIChatForwardedPropsParam
     title: str
     result_offset: int
+    assistant_message_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
