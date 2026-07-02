@@ -165,40 +165,6 @@ class AIMessageService:
             None,
         )
 
-    def _get_delete_message_index_range(
-        self,
-        *,
-        message_rows: list[AIMessage],
-        model_messages: list[ModelRequest | ModelResponse],
-        target_index: int,
-        row_model_message_ranges: list[tuple[int, int]] | None = None,
-    ) -> tuple[int, int]:
-        """
-        获取可删除的单条消息索引范围
-
-        :param message_rows: 消息行列表
-        :param model_messages: 模型消息列表
-        :param target_index: 目标行索引
-        :param row_model_message_ranges: 行到模型消息范围映射
-        :return:
-        """
-        if not self._is_user_message_row(
-            message_rows=message_rows,
-            model_messages=model_messages,
-            row_index=target_index,
-            row_model_message_ranges=row_model_message_ranges,
-        ):
-            target_row_messages = self._get_row_messages(
-                message_rows=message_rows,
-                model_messages=model_messages,
-                row_index=target_index,
-                row_model_message_ranges=row_model_message_ranges,
-            )
-            if not any(isinstance(message, ModelResponse) for message in target_row_messages):
-                raise errors.RequestError(msg='仅支持删除用户消息或 AI 回复')
-        message_index = message_rows[target_index].message_index
-        return message_index, message_index
-
     @staticmethod
     async def _prepare_regenerate_context(
         *,
@@ -230,7 +196,12 @@ class AIMessageService:
         )
         forwarded_props = run_context.forwarded_props
         async with async_db_session() as db:
-            session, agent = await open_chat_session(db=db, forwarded_props=forwarded_props)
+            session, agent = await open_chat_session(
+                db=db,
+                forwarded_props=forwarded_props,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
             state = await ai_conversation_service.get_chat_state(
                 db=db,
                 conversation_id=conversation_id,
@@ -563,12 +534,20 @@ class AIMessageService:
         message_rows = list(await ai_message_dao.get_all_by_message_index(db, conversation_id))
         target_message_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
         model_messages, row_model_message_ranges = expand_message_rows(message_rows)
-        self._get_delete_message_index_range(
+        if not self._is_user_message_row(
             message_rows=message_rows,
             model_messages=model_messages,
-            target_index=target_message_index,
+            row_index=target_message_index,
             row_model_message_ranges=row_model_message_ranges,
-        )
+        ):
+            target_row_messages = self._get_row_messages(
+                message_rows=message_rows,
+                model_messages=model_messages,
+                row_index=target_message_index,
+                row_model_message_ranges=row_model_message_ranges,
+            )
+            if not any(isinstance(message, ModelResponse) for message in target_row_messages):
+                raise errors.RequestError(msg='仅支持删除用户消息或 AI 回复')
         target_row = message_rows[target_message_index]
 
         count = await ai_message_dao.delete_message(db, pk)

@@ -133,8 +133,7 @@ class AIProviderService:
         :param db: 数据库会话
         :return:
         """
-        ai_providers = await ai_provider_dao.get_all(db)
-        return ai_providers
+        return await ai_provider_dao.get_all(db)
 
     @staticmethod
     async def create(*, db: AsyncSession, obj: CreateAIProviderParam) -> None:

@@ -89,7 +89,12 @@ class ChatService:
         agent_session = None
         try:
             async with async_db_session() as db:
-                agent_session, agent = await open_chat_session(db=db, forwarded_props=forwarded_props)
+                agent_session, agent = await open_chat_session(
+                    db=db,
+                    forwarded_props=forwarded_props,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
             current_messages = protocol_adapter.sanitize_input_messages(
                 agent=agent,
                 run_context=run_context,

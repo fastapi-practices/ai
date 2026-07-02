@@ -16,7 +16,7 @@ from backend.plugin.ai.providers.base import ProviderAdapter, ProviderCapabiliti
 class XaiAdapter(ProviderAdapter):
     """xAI 供应商适配器
 
-    使用 xai_sdk.AsyncClient 而非 httpx.AsyncClient，需要在 aclose 中显式关闭。
+    使用 xai_sdk.AsyncClient 而非 httpx.AsyncClient，需要在 aclose 中显式关闭
     """
 
     provider_type: ClassVar[AIProviderType] = AIProviderType.xai

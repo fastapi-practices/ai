@@ -13,7 +13,7 @@ ChatAgent: TypeAlias = Agent[ChatAgentDeps, ChatAgentOutput]
 
 
 class ChatProtocolAdapter(Protocol):
-    """聊天协议适配器。"""
+    """聊天协议适配器"""
 
     name: str
 

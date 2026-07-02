@@ -17,7 +17,7 @@ from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 
 
 class AgUiChatProtocolAdapter:
-    """AG-UI 聊天协议适配器。"""
+    """AG-UI 聊天协议适配器"""
 
     name = 'ag_ui'
 

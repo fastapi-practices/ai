@@ -6,7 +6,8 @@ from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType
-from backend.plugin.ai.model import AIModel, AIProvider
+from backend.plugin.ai.policy.context import AIInvocationContext
+from backend.plugin.ai.policy.registry import validate_ai_invocation
 from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage
 from backend.plugin.ai.providers.registry import get_provider_adapter
 from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
@@ -22,16 +23,20 @@ def is_user_prompt_message(*, message: ChatModelMessage) -> bool:
     return isinstance(message, ModelRequest) and bool(message.parts) and isinstance(message.parts[0], UserPromptPart)
 
 
-async def resolve_provider_model(
+async def open_chat_session(
     *,
     db: AsyncSession,
     forwarded_props: AIChatForwardedPropsParam,
-) -> tuple[AIProvider, AIModel]:
+    user_id: int | None = None,
+    conversation_id: str | None = None,
+) -> tuple[AgentSession, ChatAgent]:
     """
-    获取可用供应商及模型
+    解析供应商与模型，打开会话并构建代理
 
     :param db: 数据库会话
     :param forwarded_props: 聊天扩展参数
+    :param user_id: 用户 ID
+    :param conversation_id: 对话 ID
     :return:
     """
     provider = await ai_provider_dao.get(db, forwarded_props.provider_id)
@@ -44,28 +49,25 @@ async def resolve_provider_model(
         AIProviderType.openai_responses,
     }:
         raise errors.RequestError(msg='当前图片生成仅支持 Google 或 OpenAI Responses 供应商')
-
     model = await ai_model_dao.get_by_model_and_provider(db, forwarded_props.model_id, forwarded_props.provider_id)
     if not model:
         raise errors.NotFoundError(msg='供应商模型不存在')
     if not model.status:
         raise errors.RequestError(msg='此模型暂不可用，请更换模型或联系系统管理员')
-    return provider, model
-
-
-async def open_chat_session(
-    *,
-    db: AsyncSession,
-    forwarded_props: AIChatForwardedPropsParam,
-) -> tuple[AgentSession, ChatAgent]:
-    """
-    解析供应商与模型，打开会话并构建代理
-
-    :param db: 数据库会话
-    :param forwarded_props: 聊天扩展参数
-    :return:
-    """
-    provider, model = await resolve_provider_model(db=db, forwarded_props=forwarded_props)
+    invocation_context = None
+    if user_id is not None:
+        invocation_context = AIInvocationContext(
+            user_id=user_id,
+            provider_id=provider.id,
+            provider_type=AIProviderType(provider.type),
+            provider_name=provider.name,
+            model_pk=model.id,
+            model_id=model.model_id,
+            mcp_ids=tuple(forwarded_props.mcp_ids or ()),
+            generation_type=forwarded_props.generation_type,
+            conversation_id=conversation_id,
+        )
+        await validate_ai_invocation(db=db, context=invocation_context)
     adapter = get_provider_adapter(provider.type)
     adapter.validate_model_id(model.model_id)
     session = await AgentSession.open(
@@ -74,6 +76,7 @@ async def open_chat_session(
         api_key=provider.api_key,
         base_url=provider.api_host,
     )
+    session.invocation_context = invocation_context
     try:
         agent = await session.build_agent(db=db, forwarded_props=forwarded_props)
     except ValueError as exc:

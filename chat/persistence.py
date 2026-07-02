@@ -17,16 +17,6 @@ from backend.plugin.ai.utils.conversation_control import normalize_generated_con
 from backend.plugin.ai.utils.message_storage import build_chat_message_record
 
 
-def _is_user_prompt_message(message: ChatModelMessage) -> bool:
-    """
-    判断是否为用户消息
-
-    :param message: 模型消息
-    :return:
-    """
-    return isinstance(message, ModelRequest) and bool(message.parts) and isinstance(message.parts[0], UserPromptPart)
-
-
 def _build_chat_message_records(
     *,
     messages: list[ChatModelMessage],
@@ -49,7 +39,7 @@ def _build_chat_message_records(
         assistant_messages.clear()
 
     for message, payload_message in zip(messages, payload_messages, strict=False):
-        if _is_user_prompt_message(message):
+        if isinstance(message, ModelRequest) and bool(message.parts) and isinstance(message.parts[0], UserPromptPart):
             flush_assistant_messages()
             chat_message_records.append(build_chat_message_record(role='user', model_messages=[payload_message]))
             continue

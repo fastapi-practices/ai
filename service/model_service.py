@@ -31,8 +31,7 @@ class AIModelService:
         :param provider_id: 供应商 ID
         :return:
         """
-        ai_models = await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable.value)
-        return ai_models
+        return await ai_model_dao.get_all(db, provider_id=provider_id, status=StatusType.enable.value)
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int) -> AIModel:
