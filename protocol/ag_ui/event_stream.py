@@ -48,7 +48,13 @@ def build_streaming_response(
     :param on_finish: 流结束回调
     :return:
     """
-    adapter = AGUIAdapter(agent=agent, run_input=run_input, accept=accept)
+    adapter = AGUIAdapter(
+        agent=agent,
+        run_input=run_input,
+        accept=accept,
+        allow_uploaded_files=True,
+        preserve_file_data=True,
+    )
     event_stream = adapter.run_stream(
         deps=ChatAgentDeps(user_id=user_id),
         message_history=message_history,

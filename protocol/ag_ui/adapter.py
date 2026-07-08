@@ -49,6 +49,8 @@ class AgUiChatProtocolAdapter:
         adapter = AGUIAdapter(
             agent=agent,
             run_input=cast('RunAgentInput', run_context.protocol_context),
+            allow_uploaded_files=True,
+            preserve_file_data=True,
         )
         return adapter.sanitize_messages(messages)
 
