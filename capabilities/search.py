@@ -11,7 +11,7 @@ from backend.common.exception import errors
 from backend.core.conf import settings
 from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType, AIProviderType, AIWebSearchType
-from backend.utils.dynamic_config import load_ai_config
+from backend.plugin.ai.utils.dynamic_config import load_ai_config
 
 
 async def build_search_capabilities(ctx: CapabilityContext) -> Sequence[CapabilityResult]:
