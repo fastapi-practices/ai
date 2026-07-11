@@ -189,7 +189,6 @@ class ChatService:
             user_id=user_id,
             forwarded_props=forwarded_props,
             title=state.conversation.title if state.conversation else prompt,
-            result_offset=len(message_history),
             assistant_message_id=assistant_message_id,
         )
 

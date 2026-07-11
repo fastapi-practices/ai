@@ -7,7 +7,11 @@ from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.database.db import async_db_session
-from backend.plugin.ai.chat.persistence import persist_regeneration, persist_regeneration_error_message
+from backend.plugin.ai.chat.persistence import (
+    extract_assistant_run_messages,
+    persist_regeneration,
+    persist_regeneration_error_message,
+)
 from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
@@ -267,7 +271,6 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
-                    result_offset=len(message_history),
                     replace_start_index=replace_start_index,
                     replace_end_index=replace_end_index,
                 )
@@ -276,7 +279,6 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
-                    result_offset=len(message_history),
                     insert_before_index=insert_before_index,
                 )
             else:
@@ -284,7 +286,6 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
-                    result_offset=len(message_history),
                 )
         except Exception:
             await session.aclose()
@@ -295,7 +296,7 @@ class AIMessageService:
                 await persist_regeneration(
                     db=db,
                     persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
+                    messages=extract_assistant_run_messages(result),
                 )
 
         async def on_run_error(message: str) -> None:
@@ -390,7 +391,6 @@ class AIMessageService:
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
-                result_offset=len(message_history),
                 replace_start_index=replace_start_index,
                 replace_end_index=replace_end_index,
             )
@@ -403,7 +403,7 @@ class AIMessageService:
                 await persist_regeneration(
                     db=db,
                     persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
+                    messages=extract_assistant_run_messages(result),
                 )
 
         async def on_run_error(message: str) -> None:

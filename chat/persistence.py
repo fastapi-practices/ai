@@ -1,6 +1,7 @@
+from dataclasses import replace
 from typing import Any
 
-from pydantic_ai import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai import AgentRunResult, ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,34 @@ from backend.plugin.ai.protocol.base import ChatModelMessage
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
 from backend.plugin.ai.utils.message_storage import build_chat_message_record
+
+
+def extract_assistant_run_messages(result: AgentRunResult[Any]) -> list[ChatModelMessage]:
+    """
+    提取本轮助手消息
+
+    用户输入由聊天服务预先持久化，因此从首个模型响应开始提取，并移除运行期用户和系统提示
+
+    :param result: Agent 运行结果
+    :return:
+    """
+    new_messages = result.new_messages()
+    first_response_index = next(
+        (index for index, message in enumerate(new_messages) if isinstance(message, ModelResponse)),
+        None,
+    )
+    if first_response_index is None:
+        return []
+
+    messages: list[ChatModelMessage] = []
+    for message in new_messages[first_response_index:]:
+        if isinstance(message, ModelRequest):
+            parts = [part for part in message.parts if not isinstance(part, UserPromptPart | SystemPromptPart)]
+            if not parts:
+                continue
+            message = replace(message, parts=parts)
+        messages.append(message)
+    return messages
 
 
 def _build_chat_message_records(

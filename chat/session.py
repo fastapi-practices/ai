@@ -12,9 +12,14 @@ from backend.common.log import log
 from backend.database.db import async_db_session
 from backend.plugin.ai.chat.builder import build_model_settings
 from backend.plugin.ai.chat.generation.base import GenerationHandler
-from backend.plugin.ai.chat.persistence import persist_completion, persist_error_message
+from backend.plugin.ai.chat.persistence import extract_assistant_run_messages, persist_completion, persist_error_message
 from backend.plugin.ai.chat.pipeline import assemble_capabilities
-from backend.plugin.ai.dataclasses import ChatAgentDeps, ChatRunContext, CompletionPersistenceContext
+from backend.plugin.ai.dataclasses import (
+    ChatAgentDeps,
+    ChatRunContext,
+    CompletionPersistenceContext,
+    ContextManagementPolicy,
+)
 from backend.plugin.ai.policy.context import AIInvocationContext, AIInvocationResult
 from backend.plugin.ai.policy.registry import notify_ai_invocation_result
 from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage, ChatProtocolAdapter
@@ -87,6 +92,7 @@ class AgentSession:
         db: AsyncSession,
         forwarded_props: AIChatForwardedPropsParam,
         generation_handler: GenerationHandler,
+        context_management: ContextManagementPolicy,
     ) -> ChatAgent:
         """
         构建聊天代理
@@ -94,6 +100,7 @@ class AgentSession:
         :param db: 数据库会话
         :param forwarded_props: 聊天扩展参数
         :param generation_handler: 生成模式处理器
+        :param context_management: 上下文管理策略
         :return:
         """
         profile = self.model.profile
@@ -107,6 +114,7 @@ class AgentSession:
             supports_tools=supports_tools,
             supported_native_tools=supported_native_tools,
             supports_image_output=supports_image_output,
+            context_management=context_management,
         )
         model_settings = build_model_settings(adapter=self.adapter, forwarded_props=forwarded_props)
         output_type = generation_handler.get_output_type()
@@ -157,7 +165,7 @@ class AgentSession:
                 await persist_completion(
                     db=db,
                     persistence=persistence,
-                    messages=result.all_messages()[persistence.result_offset :],
+                    messages=extract_assistant_run_messages(result),
                 )
 
         async def default_on_run_error(message: str) -> None:

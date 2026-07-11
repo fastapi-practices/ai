@@ -84,26 +84,29 @@ class AIProviderService:
         :return:
         """
         existing_models = await ai_model_dao.get_all(db, provider_id=pk)
-        existing_status = {model.model_id: StatusType(model.status) for model in existing_models}
+        existing_models_by_id = {model.model_id: model for model in existing_models}
         provider_models = await self.get_models(db=db, pk=pk)
         await ai_model_dao.delete_by_provider(db, pk)
         if not provider_models:
             return
 
-        await ai_model_dao.bulk_create(
-            db,
-            [
-                {
-                    **CreateAIModelParam(
-                        provider_id=pk,
-                        model_id=obj.id,
-                        status=existing_status.get(obj.id, StatusType.enable),
-                    ).model_dump(),
-                    'created_time': timezone.now(),
-                }
-                for obj in provider_models
-            ],
-        )
+        payloads: list[dict[str, Any]] = []
+        for obj in provider_models:
+            existing_model = existing_models_by_id.get(obj.id)
+            model = (
+                CreateAIModelParam.model_validate(existing_model, from_attributes=True)
+                if existing_model
+                else CreateAIModelParam(
+                    provider_id=pk,
+                    model_id=obj.id,
+                    status=StatusType.enable,
+                )
+            )
+            payloads.append({
+                **model.model_dump(),
+                'created_time': timezone.now(),
+            })
+        await ai_model_dao.bulk_create(db, payloads)
 
     @staticmethod
     async def get_list(

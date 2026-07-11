@@ -3,10 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.common.context import ctx
 from backend.common.exception import errors
+from backend.core.conf import settings
 from backend.plugin.ai.chat.generation.registry import get_generation_handler
 from backend.plugin.ai.chat.session import AgentSession
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
+from backend.plugin.ai.dataclasses import ContextManagementPolicy
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.policy.context import AIInvocationContext
 from backend.plugin.ai.policy.registry import validate_ai_invocation
@@ -82,6 +84,13 @@ async def open_chat_session(
             db=db,
             forwarded_props=forwarded_props,
             generation_handler=generation_handler,
+            context_management=ContextManagementPolicy(
+                max_part_chars=model.context_max_part_chars,
+                max_messages=model.context_max_messages,
+                keep_messages=model.context_keep_messages,
+                max_tokens=model.context_max_tokens,
+                warning_threshold=settings.AI_CONTEXT_WARNING_THRESHOLD,
+            ),
         )
     except ValueError as exc:
         await session.aclose()
