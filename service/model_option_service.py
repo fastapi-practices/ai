@@ -11,7 +11,6 @@ from backend.plugin.ai.enums import AIDefaultModelScene
 from backend.plugin.ai.schema.default_model import GetAIDefaultModelDetail
 from backend.plugin.ai.schema.model import GetAIModelDetail
 from backend.plugin.ai.schema.model_option import GetAIModelOptionsDetail, GetAIProviderModelOptionDetail
-from backend.plugin.ai.schema.provider import GetAIProviderDetail
 
 if TYPE_CHECKING:
     from backend.plugin.ai.model import AIModel
@@ -57,7 +56,10 @@ class AIModelOptionService:
 
         provider_options = [
             GetAIProviderModelOptionDetail(
-                **GetAIProviderDetail.model_validate(provider).model_dump(),
+                id=provider.id,
+                name=provider.name,
+                type=provider.type,
+                status=provider.status,
                 models=models_by_provider[provider.id],
             )
             for provider in providers
