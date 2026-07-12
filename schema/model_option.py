@@ -23,4 +23,4 @@ class GetAIModelOptionsDetail(SchemaBase):
     """AI 模型选项详情"""
 
     providers: list[GetAIProviderModelOptionDetail] = Field(description='启用的供应商及模型列表')
-    default_model: GetAIDefaultModelDetail = Field(description='默认助手模型配置')
+    default_model: GetAIDefaultModelDetail | None = Field(default=None, description='默认助手模型配置')
