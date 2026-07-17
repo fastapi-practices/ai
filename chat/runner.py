@@ -1,3 +1,5 @@
+import anyio
+
 from pydantic_ai import ModelRequest, UserPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,9 +95,12 @@ async def open_chat_session(
             ),
         )
     except ValueError as exc:
-        await session.aclose()
+        # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+        with anyio.CancelScope(shield=True):
+            await session.aclose()
         raise errors.RequestError(msg=f'模型配置无效: {exc}') from exc
-    except Exception:
-        await session.aclose()
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            await session.aclose()
         raise
     return session, agent
