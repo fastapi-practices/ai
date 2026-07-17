@@ -12,7 +12,12 @@ from backend.common.log import log
 from backend.database.db import async_db_session
 from backend.plugin.ai.chat.builder import build_model_settings
 from backend.plugin.ai.chat.generation.base import GenerationHandler
-from backend.plugin.ai.chat.persistence import extract_assistant_run_messages, persist_completion, persist_error_message
+from backend.plugin.ai.chat.persistence import (
+    extract_assistant_messages,
+    extract_assistant_run_messages,
+    persist_completion,
+    persist_terminal_completion,
+)
 from backend.plugin.ai.chat.pipeline import assemble_capabilities
 from backend.plugin.ai.dataclasses import (
     ChatAgentDeps,
@@ -20,6 +25,7 @@ from backend.plugin.ai.dataclasses import (
     CompletionPersistenceContext,
     ContextManagementPolicy,
 )
+from backend.plugin.ai.enums import AIMessageStatus
 from backend.plugin.ai.policy.context import AIInvocationContext, AIInvocationResult
 from backend.plugin.ai.policy.registry import notify_ai_invocation_result
 from backend.plugin.ai.protocol.base import ChatAgent, ChatModelMessage, ChatProtocolAdapter
@@ -118,7 +124,7 @@ class AgentSession:
         )
         model_settings = build_model_settings(adapter=self.adapter, forwarded_props=forwarded_props)
         output_type = generation_handler.get_output_type()
-        return Agent(  # type: ignore
+        return Agent(
             name='fba-chat',
             deps_type=ChatAgentDeps,
             model=self.model,
@@ -138,7 +144,8 @@ class AgentSession:
         message_history: list[ChatModelMessage],
         persistence: CompletionPersistenceContext | None = None,
         on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]] | None = None,
-        on_run_error: Callable[[str], Awaitable[None]] | None = None,
+        on_run_error: Callable[[str, list[ChatModelMessage]], Awaitable[None]] | None = None,
+        on_interrupted: Callable[[list[ChatModelMessage]], Awaitable[None]] | None = None,
     ) -> StreamingResponse:
         """
         构建协议流式响应；on_finish 自动关闭会话
@@ -151,13 +158,13 @@ class AgentSession:
         :param message_history: 消息历史
         :param persistence: 普通聊天持久化上下文
         :param on_complete: 自定义完成回调，未提供时默认调用 persist_completion
-        :param on_run_error: 自定义异常回调，未提供时默认调用 persist_error_message
+        :param on_run_error: 自定义异常回调，未提供时默认持久化错误终态
+        :param on_interrupted: 自定义中断回调，未提供时默认持久化中断终态
         :return:
         """
-        if on_complete is None and persistence is None:
-            raise RuntimeError('缺少聊天完成回调')
-        if on_run_error is None and persistence is None:
-            raise RuntimeError('缺少聊天异常回调')
+        callbacks = (on_complete, on_run_error, on_interrupted)
+        if persistence is None and any(callback is None for callback in callbacks):
+            raise RuntimeError('缺少聊天生命周期回调')
 
         async def default_on_complete(result: AgentRunResult[Any]) -> None:
             assert persistence is not None
@@ -168,9 +175,22 @@ class AgentSession:
                     messages=extract_assistant_run_messages(result),
                 )
 
-        async def default_on_run_error(message: str) -> None:
+        async def default_on_run_error(message: str, messages: list[ChatModelMessage]) -> None:
             assert persistence is not None
-            await persist_error_message(persistence=persistence, error_message=message)
+            await persist_terminal_completion(
+                persistence=persistence,
+                messages=extract_assistant_messages(messages),
+                status=AIMessageStatus.error,
+                reason=message,
+            )
+
+        async def default_on_interrupted(messages: list[ChatModelMessage]) -> None:
+            assert persistence is not None
+            await persist_terminal_completion(
+                persistence=persistence,
+                messages=extract_assistant_messages(messages),
+                status=AIMessageStatus.interrupted,
+            )
 
         async def complete_with_policy(result: AgentRunResult[Any]) -> None:
             await (on_complete or default_on_complete)(result)
@@ -197,5 +217,6 @@ class AgentSession:
             message_history=message_history,
             on_complete=complete_with_policy,
             on_run_error=on_run_error or default_on_run_error,
+            on_interrupted=on_interrupted or default_on_interrupted,
             on_finish=on_finish,
         )

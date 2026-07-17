@@ -24,6 +24,18 @@ class AIConversationService:
     """AI 对话服务"""
 
     @staticmethod
+    async def ensure_idle(*, db: AsyncSession, conversation_id: str) -> None:
+        """
+        确认对话当前没有生成任务
+
+        :param db: 数据库会话
+        :param conversation_id: 对话 ID
+        :return:
+        """
+        if await ai_message_dao.has_pending(db, conversation_id):
+            raise errors.ConflictError(msg='当前对话正在生成，请稍后再试')
+
+    @staticmethod
     async def get_owned_conversation(
         *,
         db: AsyncSession,
@@ -249,6 +261,7 @@ class AIConversationService:
             user_id=user_id,
             for_update=True,
         )
+        await self.ensure_idle(db=db, conversation_id=conversation_id)
         message_rows = list(await ai_message_dao.get_all_by_message_index(db, conversation_id))
         context_start_message_id = message_rows[-1].id if message_rows else None
         context_cleared_time = timezone.now() if message_rows else None

@@ -1,4 +1,4 @@
-pydantic-ai-slim[openai,google,anthropic,xai,openrouter,mcp,retries,tavily,duckduckgo,ag-ui,exa]==2.9.0
-pydantic-ai-harness[code-mode]==0.6.0
+pydantic-ai-slim[openai,google,anthropic,xai,openrouter,mcp,retries,tavily,duckduckgo,ag-ui,exa]==2.10.0
+pydantic-ai-harness[code-mode]==0.7.0
 # pydantic-monty 0.0.19b2 移除了 MontyRepl，待 https://github.com/pydantic/pydantic-ai-harness/pull/344 发布后再解除固定
 pydantic-monty==0.0.18

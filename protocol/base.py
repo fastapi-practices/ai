@@ -71,7 +71,8 @@ class ChatProtocolAdapter(Protocol):
         accept: str | None,
         message_history: list[ChatModelMessage],
         on_complete: Callable[[AgentRunResult[Any]], Awaitable[None]],
-        on_run_error: Callable[[str], Awaitable[None]],
+        on_run_error: Callable[[str, list[ChatModelMessage]], Awaitable[None]],
+        on_interrupted: Callable[[list[ChatModelMessage]], Awaitable[None]],
         on_finish: Callable[[], Awaitable[None]] | None = None,
     ) -> StreamingResponse:
         """
@@ -84,6 +85,7 @@ class ChatProtocolAdapter(Protocol):
         :param message_history: 消息历史
         :param on_complete: 完成回调
         :param on_run_error: 运行失败回调
+        :param on_interrupted: 运行中断回调
         :param on_finish: 流结束回调
         :return:
         """

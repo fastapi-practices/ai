@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from pydantic_ai import ModelRequest, ModelResponse
@@ -91,6 +92,10 @@ class RegenerationPersistenceContext:
     conversation_id: str
     user_id: int
     forwarded_props: AIChatForwardedPropsParam
+    expected_message_versions: tuple[tuple[int, datetime | None], ...] = ()
+    expected_context_start_message_id: int | None = None
+    expected_context_cleared_time: datetime | None = None
+    assistant_message_id: int | None = None
     insert_before_index: int | None = None
     replace_start_index: int | None = None
     replace_end_index: int | None = None

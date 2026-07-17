@@ -196,7 +196,7 @@ def serialize_request_message(
         'model_id': model_id,
         'created_time': message.parts[0].timestamp,
         'message_index': message_index,
-        'message_type': 'normal',
+        'message_type': message.state if message.state != 'complete' else 'normal',
     }
 
     encoded_messages = AGUIAdapter.dump_messages([message], preserve_file_data=True)
@@ -235,7 +235,14 @@ def serialize_response_message(
         'model_id': model_id or message.model_name,
         'created_time': message.timestamp,
         'message_index': message_index,
-        'message_type': 'error' if (message.metadata or {}).get('is_error') else 'normal',
+        # 对齐 pydantic-ai ModelResponse.state（complete/incomplete/suspended/interrupted）
+        'message_type': (
+            'error'
+            if (message.metadata or {}).get('is_error')
+            else 'normal'
+            if message.state == 'complete'
+            else message.state
+        ),
     }
 
     encoded_messages = AGUIAdapter.dump_messages([message], preserve_file_data=True)

@@ -1,5 +1,8 @@
+import anyio
+
 from pydantic_ai import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_core import to_jsonable_python
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
@@ -50,8 +53,8 @@ def _parse_user_prompt(*, first_part: UserPromptPart) -> tuple[str, bool]:
     return prompt, has_binary_input
 
 
-class ChatService:
-    """聊天服务"""
+class AIChatService:
+    """AI 聊天服务类"""
 
     @staticmethod
     async def create_completion(
@@ -107,7 +110,7 @@ class ChatService:
             payload_messages = to_jsonable_python(current_messages, by_alias=True)
             assert isinstance(payload_messages, list)
             user_message_record = build_chat_message_record(role='user', model_messages=payload_messages)
-            assistant_message_id: int | None = None
+
             async with async_db_session.begin() as session:
                 conversation = await ai_conversation_service.get_owned_conversation(
                     db=session,
@@ -117,8 +120,7 @@ class ChatService:
                     for_update=True,
                 )
                 if conversation:
-                    if await ai_message_dao.has_pending(session, conversation_id):
-                        raise errors.RequestError(msg='当前对话正在生成，请稍后再试')
+                    await ai_conversation_service.ensure_idle(db=session, conversation_id=conversation_id)
                     await ai_conversation_dao.update(
                         session,
                         conversation.id,
@@ -171,36 +173,42 @@ class ChatService:
                 )
                 assistant_message_id = assistant_message.id
 
-            async with async_db_session() as db:
                 state = await ai_conversation_service.get_chat_state(
-                    db=db,
+                    db=session,
                     conversation_id=conversation_id,
                     user_id=user_id,
                     must_exist=True,
                     require_messages=True,
                 )
-        except Exception:
-            if agent_session is not None:
-                await agent_session.aclose()
+                message_history = state.model_messages[state.context_start_index :]
+                persistence = CompletionPersistenceContext(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    forwarded_props=forwarded_props,
+                    title=state.conversation.title if state.conversation else prompt,
+                    assistant_message_id=assistant_message_id,
+                )
+                response = agent_session.stream(
+                    user_id=user_id,
+                    agent=agent,
+                    run_context=run_context,
+                    protocol_adapter=protocol_adapter,
+                    accept=accept,
+                    message_history=message_history,
+                    persistence=persistence,
+                )
+        except BaseException as exc:
+            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            with anyio.CancelScope(shield=True):
+                if agent_session is not None:
+                    try:
+                        await agent_session.aclose()
+                    except Exception as close_exc:
+                        log.warning(f'关闭模型供应商客户端失败: {close_exc}')
+            if isinstance(exc, IntegrityError):
+                raise errors.ConflictError(msg='当前对话已发生变化，请重试') from exc
             raise
-        message_history = state.model_messages[state.context_start_index :]
-        persistence = CompletionPersistenceContext(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            title=state.conversation.title if state.conversation else prompt,
-            assistant_message_id=assistant_message_id,
-        )
-
-        return agent_session.stream(
-            user_id=user_id,
-            agent=agent,
-            run_context=run_context,
-            protocol_adapter=protocol_adapter,
-            accept=accept,
-            message_history=message_history,
-            persistence=persistence,
-        )
+        return response
 
 
-ai_chat_service: ChatService = ChatService()
+ai_chat_service: AIChatService = AIChatService()

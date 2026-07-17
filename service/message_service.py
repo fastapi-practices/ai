@@ -1,16 +1,22 @@
 from copy import deepcopy
+from dataclasses import replace
+from datetime import datetime
 from typing import Any
+
+import anyio
 
 from pydantic_ai import AgentRunResult, ModelRequest, ModelResponse, UserPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
+from backend.common.log import log
 from backend.database.db import async_db_session
 from backend.plugin.ai.chat.persistence import (
+    extract_assistant_messages,
     extract_assistant_run_messages,
     persist_regeneration,
-    persist_regeneration_error_message,
+    persist_terminal_regeneration,
 )
 from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
 from backend.plugin.ai.chat.session import AgentSession
@@ -21,6 +27,7 @@ from backend.plugin.ai.dataclasses import (
     ChatRunContext,
     RegenerationPersistenceContext,
 )
+from backend.plugin.ai.enums import AIMessageStatus
 from backend.plugin.ai.model import AIMessage
 from backend.plugin.ai.protocol.base import ChatAgent, ChatProtocolAdapter
 from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
@@ -199,21 +206,101 @@ class AIMessageService:
             expected_conversation_id=conversation_id,
         )
         forwarded_props = run_context.forwarded_props
-        async with async_db_session() as db:
-            session, agent = await open_chat_session(
-                db=db,
-                forwarded_props=forwarded_props,
-                user_id=user_id,
-                conversation_id=conversation_id,
-            )
-            state = await ai_conversation_service.get_chat_state(
-                db=db,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                must_exist=True,
-                require_messages=True,
-            )
+        session = None
+        try:
+            async with async_db_session() as db:
+                state = await ai_conversation_service.get_chat_state(
+                    db=db,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    must_exist=True,
+                    require_messages=True,
+                )
+                session, agent = await open_chat_session(
+                    db=db,
+                    forwarded_props=forwarded_props,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
+        except BaseException:
+            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            with anyio.CancelScope(shield=True):
+                if session is not None:
+                    try:
+                        await session.aclose()
+                    except Exception as exc:
+                        log.warning(f'关闭模型供应商客户端失败: {exc}')
+            raise
         return run_context, forwarded_props, session, agent, state, protocol_adapter
+
+    @staticmethod
+    def _build_message_versions(*, message_rows: list[AIMessage]) -> tuple[tuple[int, datetime | None], ...]:
+        """构建可检测原地修改的消息快照版本"""
+        return tuple((row.id, row.updated_time) for row in message_rows)
+
+    async def _create_regeneration_placeholder(
+        self,
+        *,
+        db: AsyncSession,
+        persistence: RegenerationPersistenceContext,
+    ) -> RegenerationPersistenceContext:
+        """
+        创建重生成占位消息并校验预加载快照未发生变化
+
+        :param db: 数据库会话
+        :param persistence: 重生成持久化上下文
+        :return:
+        """
+        conversation = await ai_conversation_service.get_owned_conversation(
+            db=db,
+            conversation_id=persistence.conversation_id,
+            user_id=persistence.user_id,
+            for_update=True,
+        )
+        assert conversation is not None
+        await ai_conversation_service.ensure_idle(
+            db=db,
+            conversation_id=persistence.conversation_id,
+        )
+        message_rows = list(await ai_message_dao.get_all_by_message_index(db, persistence.conversation_id))
+        message_versions = self._build_message_versions(message_rows=message_rows)
+        context_changed = (
+            conversation.context_start_message_id != persistence.expected_context_start_message_id
+            or conversation.context_cleared_time != persistence.expected_context_cleared_time
+        )
+        if (
+            persistence.expected_message_versions and message_versions != persistence.expected_message_versions
+        ) or context_changed:
+            raise errors.ConflictError(msg='对话消息已发生变化，请重试')
+
+        message_index = await ai_message_dao.get_next_message_index(db, persistence.conversation_id)
+        assistant_placeholder = await ai_message_dao.create(
+            db,
+            {
+                'conversation_id': persistence.conversation_id,
+                'provider_id': persistence.forwarded_props.provider_id,
+                'model_id': persistence.forwarded_props.model_id,
+                'message_index': message_index,
+                'role': 'assistant',
+                'status': AIMessageStatus.pending,
+                'model_messages': [],
+            },
+        )
+        await ai_conversation_dao.update(
+            db,
+            conversation.id,
+            UpdateAIConversationParam(
+                conversation_id=conversation.conversation_id,
+                title=conversation.title,
+                provider_id=persistence.forwarded_props.provider_id,
+                model_id=persistence.forwarded_props.model_id,
+                user_id=conversation.user_id,
+                pinned_time=conversation.pinned_time,
+                context_start_message_id=conversation.context_start_message_id,
+                context_cleared_time=conversation.context_cleared_time,
+            ),
+        )
+        return replace(persistence, assistant_message_id=assistant_placeholder.id)
 
     async def regenerate_from_user_message(
         self,
@@ -240,6 +327,8 @@ class AIMessageService:
             obj=obj,
         )
         try:
+            conversation = state.conversation
+            assert conversation is not None
             row_model_message_ranges = getattr(state, 'row_model_message_ranges', None)
             target_index = self._get_message_row_index(message_rows=state.message_rows, pk=pk)
             target_messages = self._get_row_messages(
@@ -260,6 +349,7 @@ class AIMessageService:
 
             reply_start_index = target_index + 1
             message_history = state.model_messages[state.context_start_index : target_end_index]
+            expected_message_versions = self._build_message_versions(message_rows=state.message_rows)
             replace_start_index, replace_end_index, insert_before_index = self._get_reply_segment_indexes(
                 message_rows=state.message_rows,
                 model_messages=state.model_messages,
@@ -271,6 +361,9 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
+                    expected_message_versions=expected_message_versions,
+                    expected_context_start_message_id=conversation.context_start_message_id,
+                    expected_context_cleared_time=conversation.context_cleared_time,
                     replace_start_index=replace_start_index,
                     replace_end_index=replace_end_index,
                 )
@@ -279,6 +372,9 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
+                    expected_message_versions=expected_message_versions,
+                    expected_context_start_message_id=conversation.context_start_message_id,
+                    expected_context_cleared_time=conversation.context_cleared_time,
                     insert_before_index=insert_before_index,
                 )
             else:
@@ -286,32 +382,57 @@ class AIMessageService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     forwarded_props=forwarded_props,
+                    expected_message_versions=expected_message_versions,
+                    expected_context_start_message_id=conversation.context_start_message_id,
+                    expected_context_cleared_time=conversation.context_cleared_time,
                 )
-        except Exception:
-            await session.aclose()
-            raise
 
-        async def on_complete(result: AgentRunResult[Any]) -> None:
             async with async_db_session.begin() as db:
-                await persist_regeneration(
-                    db=db,
-                    persistence=persistence,
-                    messages=extract_assistant_run_messages(result),
+                persistence = await self._create_regeneration_placeholder(db=db, persistence=persistence)
+
+                async def on_complete(result: AgentRunResult[Any]) -> None:
+                    async with async_db_session.begin() as callback_db:
+                        await persist_regeneration(
+                            db=callback_db,
+                            persistence=persistence,
+                            messages=extract_assistant_run_messages(result),
+                        )
+
+                async def on_run_error(message: str, messages: list[ModelRequest | ModelResponse]) -> None:
+                    await persist_terminal_regeneration(
+                        persistence=persistence,
+                        messages=extract_assistant_messages(messages),
+                        status=AIMessageStatus.error,
+                        reason=message,
+                    )
+
+                async def on_interrupted(messages: list[ModelRequest | ModelResponse]) -> None:
+                    await persist_terminal_regeneration(
+                        persistence=persistence,
+                        messages=extract_assistant_messages(messages),
+                        status=AIMessageStatus.interrupted,
+                    )
+
+                response = session.stream(
+                    user_id=user_id,
+                    agent=agent,
+                    run_context=run_context,
+                    protocol_adapter=protocol_adapter,
+                    accept=accept,
+                    message_history=message_history,
+                    on_complete=on_complete,
+                    on_run_error=on_run_error,
+                    on_interrupted=on_interrupted,
                 )
-
-        async def on_run_error(message: str) -> None:
-            await persist_regeneration_error_message(persistence=persistence, error_message=message)
-
-        return session.stream(
-            user_id=user_id,
-            agent=agent,
-            run_context=run_context,
-            protocol_adapter=protocol_adapter,
-            accept=accept,
-            message_history=message_history,
-            on_complete=on_complete,
-            on_run_error=on_run_error,
-        )
+        except BaseException:
+            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            with anyio.CancelScope(shield=True):
+                try:
+                    await session.aclose()
+                except Exception as exc:
+                    log.warning(f'关闭模型供应商客户端失败: {exc}')
+            raise
+        return response
 
     async def regenerate_from_response_message(
         self,
@@ -338,6 +459,8 @@ class AIMessageService:
             obj=obj,
         )
         try:
+            conversation = state.conversation
+            assert conversation is not None
             row_model_message_ranges = getattr(state, 'row_model_message_ranges', None)
             target_index = self._get_message_row_index(message_rows=state.message_rows, pk=pk)
             target_messages = self._get_row_messages(
@@ -391,34 +514,59 @@ class AIMessageService:
                 conversation_id=conversation_id,
                 user_id=user_id,
                 forwarded_props=forwarded_props,
+                expected_message_versions=self._build_message_versions(message_rows=state.message_rows),
+                expected_context_start_message_id=conversation.context_start_message_id,
+                expected_context_cleared_time=conversation.context_cleared_time,
                 replace_start_index=replace_start_index,
                 replace_end_index=replace_end_index,
             )
-        except Exception:
-            await session.aclose()
-            raise
 
-        async def on_complete(result: AgentRunResult[Any]) -> None:
             async with async_db_session.begin() as db:
-                await persist_regeneration(
-                    db=db,
-                    persistence=persistence,
-                    messages=extract_assistant_run_messages(result),
+                persistence = await self._create_regeneration_placeholder(db=db, persistence=persistence)
+
+                async def on_complete(result: AgentRunResult[Any]) -> None:
+                    async with async_db_session.begin() as callback_db:
+                        await persist_regeneration(
+                            db=callback_db,
+                            persistence=persistence,
+                            messages=extract_assistant_run_messages(result),
+                        )
+
+                async def on_run_error(message: str, messages: list[ModelRequest | ModelResponse]) -> None:
+                    await persist_terminal_regeneration(
+                        persistence=persistence,
+                        messages=extract_assistant_messages(messages),
+                        status=AIMessageStatus.error,
+                        reason=message,
+                    )
+
+                async def on_interrupted(messages: list[ModelRequest | ModelResponse]) -> None:
+                    await persist_terminal_regeneration(
+                        persistence=persistence,
+                        messages=extract_assistant_messages(messages),
+                        status=AIMessageStatus.interrupted,
+                    )
+
+                response = session.stream(
+                    user_id=user_id,
+                    agent=agent,
+                    run_context=run_context,
+                    protocol_adapter=protocol_adapter,
+                    accept=accept,
+                    message_history=message_history,
+                    on_complete=on_complete,
+                    on_run_error=on_run_error,
+                    on_interrupted=on_interrupted,
                 )
-
-        async def on_run_error(message: str) -> None:
-            await persist_regeneration_error_message(persistence=persistence, error_message=message)
-
-        return session.stream(
-            user_id=user_id,
-            agent=agent,
-            run_context=run_context,
-            protocol_adapter=protocol_adapter,
-            accept=accept,
-            message_history=message_history,
-            on_complete=on_complete,
-            on_run_error=on_run_error,
-        )
+        except BaseException:
+            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            with anyio.CancelScope(shield=True):
+                try:
+                    await session.aclose()
+                except Exception as exc:
+                    log.warning(f'关闭模型供应商客户端失败: {exc}')
+            raise
+        return response
 
     async def update(
         self,
@@ -445,6 +593,7 @@ class AIMessageService:
             user_id=user_id,
             for_update=True,
         )
+        await ai_conversation_service.ensure_idle(db=db, conversation_id=conversation_id)
         message_rows = list(await ai_message_dao.get_all_by_message_index(db, conversation_id))
         model_messages, row_model_message_ranges = expand_message_rows(message_rows)
         message_row_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
@@ -492,6 +641,7 @@ class AIMessageService:
             user_id=user_id,
             for_update=True,
         )
+        await ai_conversation_service.ensure_idle(db=db, conversation_id=conversation_id)
         await ai_conversation_dao.update(
             db,
             conversation.id,
@@ -531,6 +681,7 @@ class AIMessageService:
             user_id=user_id,
             for_update=True,
         )
+        await ai_conversation_service.ensure_idle(db=db, conversation_id=conversation_id)
         message_rows = list(await ai_message_dao.get_all_by_message_index(db, conversation_id))
         target_message_index = self._get_message_row_index(message_rows=message_rows, pk=pk)
         model_messages, row_model_message_ranges = expand_message_rows(message_rows)
