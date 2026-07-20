@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Request
+from pydantic_ai.ui import SSE_CONTENT_TYPE
 from starlette.responses import StreamingResponse
 
 from backend.common.response.response_schema import ResponseModel, response_base
@@ -29,7 +30,7 @@ async def regenerate_conversation_message(
         conversation_id=conversation_id,
         pk=pk,
         obj=obj,
-        accept=request.headers.get('accept'),
+        accept=request.headers.get('accept', SSE_CONTENT_TYPE),
     )
 
 
@@ -49,7 +50,7 @@ async def regenerate_conversation_response(
         conversation_id=conversation_id,
         pk=pk,
         obj=obj,
-        accept=request.headers.get('accept'),
+        accept=request.headers.get('accept', SSE_CONTENT_TYPE),
     )
 
 
