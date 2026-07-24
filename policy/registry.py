@@ -72,7 +72,7 @@ async def notify_ai_invocation_result(
                 # 单策略失败回滚自身变更，不影响其他策略与主流程
                 async with db.begin_nested():
                     await policy.after_invoke(db=db, context=context, result=result)
-            except Exception as exc:  # noqa: PERF203
+            except Exception as exc:  # ruff:ignore[try-except-in-loop]
                 log.warning(f'AI 调用后策略执行失败: {exc}')
     finally:
         end_ai_policy_shared(token)

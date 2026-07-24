@@ -223,7 +223,7 @@ class AIMessageService:
                     conversation_id=conversation_id,
                 )
         except BaseException:
-            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
             with anyio.CancelScope(shield=True):
                 if session is not None:
                     try:
@@ -235,7 +235,12 @@ class AIMessageService:
 
     @staticmethod
     def _build_message_versions(*, message_rows: list[AIMessage]) -> tuple[tuple[int, datetime | None], ...]:
-        """构建可检测原地修改的消息快照版本"""
+        """
+        构建可检测原地修改的消息快照版本
+
+        :param message_rows: 消息行列表
+        :return:
+        """
         return tuple((row.id, row.updated_time) for row in message_rows)
 
     async def _create_regeneration_placeholder(
@@ -425,7 +430,7 @@ class AIMessageService:
                     on_interrupted=on_interrupted,
                 )
         except BaseException:
-            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
             with anyio.CancelScope(shield=True):
                 try:
                     await session.aclose()
@@ -559,7 +564,7 @@ class AIMessageService:
                     on_interrupted=on_interrupted,
                 )
         except BaseException:
-            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
             with anyio.CancelScope(shield=True):
                 try:
                     await session.aclose()

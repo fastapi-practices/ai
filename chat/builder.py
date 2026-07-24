@@ -10,15 +10,17 @@ def build_model_settings(
     *,
     adapter: ProviderAdapter,
     forwarded_props: AIChatForwardedPropsParam,
+    model_name: str | None = None,
 ) -> ModelSettings:
     """
     按供应商构建模型配置
 
     :param adapter: 供应商适配器
     :param forwarded_props: 聊天扩展参数
+    :param model_name: 模型名称
     :return:
     """
     included = COMMON_MODEL_SETTING_FIELDS - adapter.capabilities['excluded_setting_fields']
     payload = forwarded_props.model_dump(include=included, exclude_unset=True, exclude_none=True)
-    payload.update(adapter.resolve_extra_settings(forwarded_props=forwarded_props))
+    payload.update(adapter.resolve_extra_settings(forwarded_props=forwarded_props, model_name=model_name))
     return cast('ModelSettings', adapter.settings_cls(**payload))

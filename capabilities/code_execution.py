@@ -5,7 +5,7 @@ from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType
 
 
-async def build_code_execution_capability(ctx: CapabilityContext) -> CapabilityResult:  # noqa: RUF029
+async def build_code_execution_capability(ctx: CapabilityContext) -> CapabilityResult:  # ruff:ignore[unused-async]
     """
     构建代码执行能力
 

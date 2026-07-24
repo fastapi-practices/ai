@@ -4,7 +4,7 @@ from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatThinkingType
 
 
-async def build_thinking_capability(ctx: CapabilityContext) -> CapabilityResult:  # noqa: RUF029
+async def build_thinking_capability(ctx: CapabilityContext) -> CapabilityResult:  # ruff:ignore[unused-async]
     """
     构建 Thinking 能力
 

@@ -20,7 +20,7 @@ IMAGE_GENERATION_FIELD_MAP: dict[str, str] = {
 }
 
 
-async def build_image_generation_capability(ctx: CapabilityContext) -> CapabilityResult:  # noqa: RUF029
+async def build_image_generation_capability(ctx: CapabilityContext) -> CapabilityResult:  # ruff:ignore[unused-async]
     """
     构建图片生成能力
 

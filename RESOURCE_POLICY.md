@@ -60,7 +60,9 @@
 
 后端对话接口以 AG-UI 作为外部协议，以 Pydantic AI `ModelMessage` 作为内部消息与存储格式。AG-UI 主要在请求入口、流式事件输出、历史快照输出三个位置介入
 
-流式运行通过 `capture_run_messages()` 捕获当前 `run_id` 的原生消息。成功时使用 `AgentRunResult.new_messages()`，失败或客户端取消时先关闭 Pydantic AI 原生流，再持久化其生成的 `ModelRequest.state`、`ModelResponse.state` 与 `ToolReturnPart.outcome`。插件不自行配对、过滤或补造工具调用结果，后续历史修复由 Pydantic AI（>=2.10.0，当前 2.13.x）负责
+流式运行通过 `capture_run_messages()` 捕获当前 `run_id` 的原生消息。成功时使用 `AgentRunResult.new_messages()`，失败或客户端取消时先关闭 Pydantic AI 原生流，再持久化其生成的 `ModelRequest.state`、`ModelResponse.state` 与 `ToolReturnPart.outcome`。插件不自行配对、过滤或补造工具调用结果，后续历史修复由 Pydantic AI（>=2.10.0，当前 2.17.x）负责
+
+客户端取消触发跨任务关闭时，仅忽略 Pydantic AI 消息捕获上下文的已知 `ContextVar` 重置异常，其他模型或流异常仍按原流程传播
 
 ```mermaid
 flowchart TD
@@ -105,7 +107,7 @@ flowchart TD
   O --> P["写入 assistant 占位消息<br/>status = pending"]
   P --> Q["提交事务"]
 
-  Q --> R["AGUIAdapter.run_stream_native<br/>capture_run_messages 捕获原生状态"]
+  Q --> R["AGUIAdapter.run_stream<br/>capture_run_messages 捕获原生状态"]
 
   R --> T{"流式事件来源"}
   T -->|"文本增量"| U["Pydantic AI text delta"]
@@ -113,12 +115,12 @@ flowchart TD
   T -->|"工具调用"| W["Pydantic AI tool call / tool result"]
   T -->|"生命周期"| X["run / step / state"]
 
-  U --> Y["AG-UI adapter.build_streaming_response<br/>转换为 TEXT_MESSAGE_*"]
-  V --> Z["AG-UI adapter.build_streaming_response<br/>转换为 REASONING_* / THINKING_*"]
-  W --> AA["AG-UI adapter.build_streaming_response<br/>转换为 TOOL_CALL_* / file event"]
-  X --> AB["AG-UI adapter.build_streaming_response<br/>转换为 RUN / STEP / STATE"]
+  U --> Y["Pydantic AI AG-UI event stream<br/>转换为 TEXT_MESSAGE_*"]
+  V --> Z["Pydantic AI AG-UI event stream<br/>转换为 REASONING_* / THINKING_*"]
+  W --> AA["Pydantic AI AG-UI event stream<br/>转换为 TOOL_CALL_* / file event"]
+  X --> AB["Pydantic AI AG-UI event stream<br/>转换为 RUN / STEP / STATE"]
 
-  Y --> AC["SSE 返回前端<br/>AG-UI Event Stream"]
+  Y --> AC["Pydantic AI streaming_response<br/>SSE 返回前端 AG-UI Event Stream"]
   Z --> AC
   AA --> AC
   AB --> AC

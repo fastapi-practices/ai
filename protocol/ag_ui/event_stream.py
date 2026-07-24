@@ -5,10 +5,10 @@ import anyio
 
 from ag_ui.core import BaseEvent, RunAgentInput, RunErrorEvent
 from pydantic_ai import Agent, AgentRunResult, BinaryImage, ModelRequest, ModelResponse, capture_run_messages
-from pydantic_ai.ui import NativeEvent
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.responses import StreamingResponse
 
+from backend.common.log import log
 from backend.plugin.ai.dataclasses import ChatAgentDeps
 
 ChatModelMessage: TypeAlias = ModelRequest | ModelResponse
@@ -93,70 +93,49 @@ def _extract_current_run_messages(
     return [message for message in captured_messages if message.run_id == current_run_id]
 
 
-async def _settle_event_streams(
-    *,
-    event_stream: AsyncIterator[BaseEvent],
-    native_stream: AsyncIterator[NativeEvent],
-    stream_error: BaseException | None,
-) -> None:
-    """先停止原生流，再耗尽官方 AG-UI 转换器的尾部事件"""
-    # shield：任务取消时仍完成流关闭与尾部耗尽，避免悬挂连接
-    with anyio.CancelScope(shield=True):
-        try:
-            athrow = getattr(native_stream, 'athrow', None) if stream_error is not None else None
-            if athrow is not None:
-                try:
-                    await athrow(stream_error)
-                except BaseException:
-                    # 原始流异常优先，关闭异常不能覆盖它
-                    pass
-            else:
-                aclose = getattr(native_stream, 'aclose', None)
-                if aclose is not None:
-                    await aclose()
-        finally:
-            async for _ in event_stream:
-                pass
+async def _close_event_stream(event_stream: AsyncIterator[BaseEvent]) -> None:
+    """在当前任务中关闭 Pydantic AI 官方事件流"""
+    aclose = getattr(event_stream, 'aclose', None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except BaseException as exc:
+        # 清理异常不能覆盖模型异常或客户端取消，也不能留下未回收的后台任务
+        log.warning('关闭 Pydantic AI 事件流失败: {}', exc)
 
 
-async def _stream_with_lifecycle(
+async def _observe_native_events(
     *,
     event_stream: AsyncIterator[BaseEvent],
-    native_stream: AsyncIterator[NativeEvent],
     message_history: Sequence[ChatModelMessage],
     lifecycle: _StreamLifecycle,
-    encode_event: Callable[[BaseEvent], str],
     on_finish: Callable[[], Awaitable[None]] | None,
-) -> AsyncIterator[str]:
-    """消费事件流并保证中断清理"""
+) -> AsyncIterator[BaseEvent]:
+    """观察 Pydantic AI 原生事件并执行持久化生命周期回调"""
     current_run_messages: list[ChatModelMessage] = []
-    stream_error: BaseException | None = None
     try:
-        with capture_run_messages() as captured_messages:
-            try:
-                async for event in event_stream:
-                    if isinstance(event, RunErrorEvent):
-                        lifecycle.record_error(event.message or '')
-                    yield encode_event(event)
-            except BaseException as exc:
-                stream_error = exc
-                raise
-            finally:
+        try:
+            with capture_run_messages() as captured_messages:
                 try:
-                    await _settle_event_streams(
-                        event_stream=event_stream,
-                        native_stream=native_stream,
-                        stream_error=stream_error,
-                    )
+                    async for event in event_stream:
+                        if isinstance(event, RunErrorEvent):
+                            lifecycle.record_error(event.message or '')
+                        yield event
                 finally:
+                    await _close_event_stream(event_stream)
                     current_run_messages.extend(
                         _extract_current_run_messages(
                             captured_messages=captured_messages,
                             message_history=message_history,
                         )
                     )
+        except ValueError as exc:
+            if 'created in a different Context' not in str(exc):
+                raise
+            log.warning('Pydantic AI 消息捕获上下文已在其他任务关闭: {}', exc)
     finally:
-        # shield：任务取消时仍完成落库/回调，避免状态与资源不一致
+        # 屏蔽取消：任务取消时仍完成落库/回调，避免状态与资源不一致
         with anyio.CancelScope(shield=True):
             try:
                 await lifecycle.finalize(current_run_messages)
@@ -203,26 +182,19 @@ def build_streaming_response(
         on_run_error=on_run_error,
         on_interrupted=on_interrupted,
     )
-    native_stream = adapter.run_stream_native(
+    event_stream_handler = adapter.build_event_stream()
+    event_stream = adapter.run_stream(
         deps=ChatAgentDeps(user_id=user_id),
         message_history=message_history,
-    )
-    event_stream_handler = adapter.build_event_stream()
-    event_stream = event_stream_handler.transform_stream(
-        native_stream,
         on_complete=lifecycle.complete,
     )
-    response = StreamingResponse(
-        _stream_with_lifecycle(
+    response = event_stream_handler.streaming_response(
+        _observe_native_events(
             event_stream=event_stream,
-            native_stream=native_stream,
             message_history=message_history,
             lifecycle=lifecycle,
-            encode_event=event_stream_handler.encode_event,
             on_finish=on_finish,
-        ),
-        headers=event_stream_handler.response_headers,
-        media_type=event_stream_handler.content_type,
+        )
     )
     response.headers['X-Accel-Buffering'] = 'no'
     response.headers['Cache-Control'] = 'no-cache'

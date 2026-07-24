@@ -95,7 +95,7 @@ async def open_chat_session(
             ),
         )
     except ValueError as exc:
-        # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+        # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
         with anyio.CancelScope(shield=True):
             await session.aclose()
         raise errors.RequestError(msg=f'模型配置无效: {exc}') from exc

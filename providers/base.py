@@ -79,11 +79,17 @@ class ProviderAdapter(ABC):
         """
         return
 
-    def resolve_extra_settings(self, *, forwarded_props: AIChatForwardedPropsParam) -> dict[str, Any]:
+    def resolve_extra_settings(
+        self,
+        *,
+        forwarded_props: AIChatForwardedPropsParam,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
         """
         获取供应商特有的额外 settings，默认无
 
         :param forwarded_props: 聊天扩展参数
+        :param model_name: 模型名称
         :return:
         """
         return {}

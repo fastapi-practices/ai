@@ -50,14 +50,39 @@ class OpenAIResponsesAdapter(ProviderAdapter):
         )
         return OpenAIResponsesModel(model_name, provider=OpenAIProvider(openai_client=openai_client))
 
-    def resolve_extra_settings(self, *, forwarded_props: AIChatForwardedPropsParam) -> dict[str, Any]:
+    def resolve_extra_settings(
+        self,
+        *,
+        forwarded_props: AIChatForwardedPropsParam,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
         """
         根据请求附加 Responses 专属 settings
 
         :param forwarded_props: 聊天扩展参数
+        :param model_name: 模型名称
         :return:
         """
         extras: dict[str, Any] = {}
+        normalized_model_name = (model_name or '').lower()
+        thinking_disabled = forwarded_props.thinking is None or forwarded_props.thinking is False
+        if thinking_disabled and normalized_model_name.startswith('doubao-'):
+            extras['openai_reasoning_effort'] = 'minimal'
+        elif (
+            thinking_disabled
+            and not normalized_model_name.startswith('gpt-5.1-codex')
+            and normalized_model_name.startswith((
+                'deepseek-',
+                'glm-',
+                'gpt-5.1',
+                'gpt-5.2',
+                'gpt-5.3',
+                'gpt-5.4',
+                'gpt-5.5',
+                'gpt-5.6',
+            ))
+        ):
+            extras['openai_reasoning_effort'] = 'none'
         if forwarded_props.generation_type == AIChatGenerationType.text and forwarded_props.enable_builtin_tools:
             extras['openai_include_code_execution_outputs'] = True
         if forwarded_props.web_search == AIWebSearchType.builtin:

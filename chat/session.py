@@ -122,7 +122,11 @@ class AgentSession:
             supports_image_output=supports_image_output,
             context_management=context_management,
         )
-        model_settings = build_model_settings(adapter=self.adapter, forwarded_props=forwarded_props)
+        model_settings = build_model_settings(
+            adapter=self.adapter,
+            forwarded_props=forwarded_props,
+            model_name=self.model.model_name,
+        )
         output_type = generation_handler.get_output_type()
         return Agent(
             name='fba-chat',

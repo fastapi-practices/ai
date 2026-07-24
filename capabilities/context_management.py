@@ -6,7 +6,7 @@ from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType
 
 
-async def build_context_management_capabilities(  # noqa: RUF029
+async def build_context_management_capabilities(  # ruff:ignore[unused-async]
     ctx: CapabilityContext,
 ) -> Sequence[CapabilityResult]:
     """

@@ -198,7 +198,7 @@ class AIChatService:
                     persistence=persistence,
                 )
         except BaseException as exc:
-            # shield：任务取消时仍完成客户端关闭，避免连接泄漏
+            # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
             with anyio.CancelScope(shield=True):
                 if agent_session is not None:
                     try:

@@ -3,7 +3,7 @@ from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.tools.chat_builtin_toolset import build_chat_builtin_capability
 
 
-async def build_builtin_toolset_capability(ctx: CapabilityContext) -> CapabilityResult:  # noqa: RUF029
+async def build_builtin_toolset_capability(ctx: CapabilityContext) -> CapabilityResult:  # ruff:ignore[unused-async]
     """
     构建项目内置 toolset 能力
 

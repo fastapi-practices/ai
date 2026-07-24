@@ -7,7 +7,7 @@ from backend.plugin.ai.dataclasses import CapabilityContext, CapabilityResult
 from backend.plugin.ai.enums import AIChatGenerationType
 
 
-async def build_code_mode_capability(ctx: CapabilityContext) -> CapabilityResult:  # noqa: RUF029
+async def build_code_mode_capability(ctx: CapabilityContext) -> CapabilityResult:  # ruff:ignore[unused-async]
     """
     构建 CodeMode 能力
 
