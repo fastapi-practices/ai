@@ -2,13 +2,13 @@ from datetime import datetime
 
 import sqlalchemy as sa
 
-from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.plugin.ai.model import AIConversation
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
+from backend.utils.timezone import timezone
 
 
 class CRUDAIConversation(CRUDPlus[AIConversation]):
@@ -22,7 +22,7 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param pk: ID
         :return:
         """
-        return await self.select_model(db, pk)
+        return await self.select_model(db, pk, deleted=0)
 
     async def get_by_conversation_id(self, db: AsyncSession, conversation_id: str) -> AIConversation | None:
         """
@@ -32,7 +32,22 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param conversation_id: 对话 ID
         :return:
         """
-        return await self.select_model_by_column(db, conversation_id=conversation_id)
+        return await self.select_model_by_column(db, conversation_id=conversation_id, deleted=0)
+
+    async def get_by_conversation_id_for_update(
+        self,
+        db: AsyncSession,
+        conversation_id: str,
+    ) -> AIConversation | None:
+        """
+        通过对话 ID 获取并锁定对话
+
+        :param db: 数据库会话
+        :param conversation_id: 对话 ID
+        :return:
+        """
+        stmt = (await self.select(conversation_id=conversation_id, deleted=0)).with_for_update()
+        return await db.scalar(stmt)
 
     async def get_select(self, user_id: int) -> Select[tuple[AIConversation]]:
         """
@@ -41,9 +56,10 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param user_id: 用户 ID
         :return:
         """
-        stmt = select(self.model).where(self.model.user_id == user_id)
-        pinned_first = sa.case((self.model.pinned_time.is_(None), 1), else_=0)
-        return stmt.order_by(pinned_first, desc(self.model.id))
+        stmt = await self.select(user_id=user_id, deleted=0)
+        pin_rank = sa.case((self.model.pinned_time.is_not(None), 1), else_=0)
+        activity_time = sa.func.coalesce(self.model.updated_time, self.model.created_time)
+        return stmt.order_by(sa.desc(pin_rank), sa.desc(activity_time), sa.desc(self.model.id))
 
     async def create(self, db: AsyncSession, obj: CreateAIConversationParam) -> None:
         """
@@ -64,7 +80,7 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param obj: 更新对话参数
         :return:
         """
-        return await self.update_model(db, pk, obj)
+        return await self.update_model_by_column(db, obj, id=pk, deleted=0)
 
     async def update_title(self, db: AsyncSession, pk: int, title: str) -> int:
         """
@@ -75,7 +91,7 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param title: 对话标题
         :return:
         """
-        return await self.update_model(db, pk, {'title': title})
+        return await self.update_model_by_column(db, {'title': title}, id=pk, deleted=0)
 
     async def update_pinned_time(self, db: AsyncSession, pk: int, pinned_time: datetime | None) -> int:
         """
@@ -86,7 +102,7 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param pinned_time: 置顶时间
         :return:
         """
-        return await self.update_model(db, pk, {'pinned_time': pinned_time})
+        return await self.update_model_by_column(db, {'pinned_time': pinned_time}, id=pk, deleted=0)
 
     async def delete(self, db: AsyncSession, conversation_id: str, user_id: int) -> int:
         """
@@ -97,7 +113,17 @@ class CRUDAIConversation(CRUDPlus[AIConversation]):
         :param user_id: 用户 ID
         :return:
         """
-        return await self.delete_model_by_column(db, conversation_id=conversation_id, user_id=user_id)
+        return await self.delete_model_by_column(
+            db,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            conversation_id=conversation_id,
+            user_id=user_id,
+            deleted=0,
+        )
 
 
 ai_conversation_dao: CRUDAIConversation = CRUDAIConversation(AIConversation)

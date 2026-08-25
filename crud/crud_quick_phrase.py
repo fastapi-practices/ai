@@ -6,6 +6,7 @@ from sqlalchemy_crud_plus import CRUDPlus
 
 from backend.plugin.ai.model import AIQuickPhrase
 from backend.plugin.ai.schema.quick_phrase import CreateAIQuickPhraseParam, UpdateAIQuickPhraseParam
+from backend.utils.timezone import timezone
 
 
 class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
@@ -19,7 +20,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param pk: 快捷短语 ID
         :return:
         """
-        return await self.select_model(db, pk)
+        return await self.select_model(db, pk, deleted=0)
 
     async def get_by_id_and_user_id(self, db: AsyncSession, pk: int, user_id: int) -> AIQuickPhrase | None:
         """
@@ -30,7 +31,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param user_id: 用户 ID
         :return:
         """
-        return await self.select_model_by_column(db, id=pk, user_id=user_id)
+        return await self.select_model_by_column(db, id=pk, user_id=user_id, deleted=0)
 
     async def get_select(self, user_id: int, content: str | None) -> Select:
         """
@@ -40,7 +41,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param content: 短语内容
         :return:
         """
-        filters = {'user_id': user_id}
+        filters = {'user_id': user_id, 'deleted': 0}
 
         if content is not None:
             filters['content__like'] = f'%{content}%'
@@ -55,7 +56,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param user_id: 用户 ID
         :return:
         """
-        return await self.select_models_order(db, 'sort', 'asc', user_id=user_id)
+        return await self.select_models_order(db, 'sort', 'asc', user_id=user_id, deleted=0)
 
     async def create(self, db: AsyncSession, obj: CreateAIQuickPhraseParam, user_id: int) -> None:
         """
@@ -66,8 +67,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param user_id: 用户 ID
         :return:
         """
-        quick_phrase = self.model(**obj.model_dump(), user_id=user_id)
-        db.add(quick_phrase)
+        await self.create_model(db, obj, user_id=user_id)
 
     async def update(self, db: AsyncSession, pk: int, obj: UpdateAIQuickPhraseParam) -> int:
         """
@@ -78,7 +78,7 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param obj: 更新参数
         :return:
         """
-        return await self.update_model(db, pk, obj)
+        return await self.update_model_by_column(db, obj, id=pk, deleted=0)
 
     async def delete(self, db: AsyncSession, pk: int, user_id: int) -> int:
         """
@@ -89,7 +89,17 @@ class CRUDAIQuickPhrase(CRUDPlus[AIQuickPhrase]):
         :param user_id: 用户 ID
         :return:
         """
-        return await self.delete_model_by_column(db, id=pk, user_id=user_id)
+        return await self.delete_model_by_column(
+            db,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            id=pk,
+            user_id=user_id,
+            deleted=0,
+        )
 
 
 ai_quick_phrase_dao: CRUDAIQuickPhrase = CRUDAIQuickPhrase(AIQuickPhrase)

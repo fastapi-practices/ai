@@ -4,7 +4,7 @@ from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from backend.common.schema import SchemaBase
-from backend.plugin.ai.protocol.ag_ui.schema import AIChatAgUiMessagesSnapshotDetail
+from backend.plugin.ai.protocol.default_schema import AIChatMessagesSnapshotDetail
 
 
 class AIConversationSchemaBase(SchemaBase):
@@ -16,8 +16,6 @@ class AIConversationSchemaBase(SchemaBase):
     model_id: str = Field(description='模型 ID')
     user_id: int = Field(description='用户 ID')
     pinned_time: datetime | None = Field(default=None, description='置顶时间')
-    context_start_message_id: int | None = Field(default=None, description='上下文起始消息 ID')
-    context_cleared_time: datetime | None = Field(default=None, description='上下文清除时间')
 
 
 class CreateAIConversationParam(AIConversationSchemaBase):
@@ -49,6 +47,7 @@ class GetAIConversationListDetail(SchemaBase):
     conversation_id: str = Field(description='对话 ID')
     title: str = Field(description='对话标题')
     is_pinned: bool = Field(description='是否置顶')
+    is_generating: bool = Field(default=False, description='是否正在生成')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
 
@@ -64,8 +63,7 @@ class GetAIConversationDetail(SchemaBase):
     is_pinned: bool = Field(description='是否置顶')
     provider_id: int = Field(description='供应商 ID')
     model_id: str = Field(description='模型 ID')
-    context_start_message_id: int | None = Field(default=None, description='上下文起始消息 ID')
-    context_cleared_time: datetime | None = Field(default=None, description='上下文清除时间')
     created_time: datetime = Field(description='创建时间')
     updated_time: datetime | None = Field(None, description='更新时间')
-    messages_snapshot: AIChatAgUiMessagesSnapshotDetail = Field(description='对话消息快照')
+    is_generating: bool = Field(default=False, description='是否正在生成')
+    messages_snapshot: AIChatMessagesSnapshotDetail = Field(description='对话消息快照')

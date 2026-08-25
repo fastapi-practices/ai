@@ -7,6 +7,7 @@ from sqlalchemy_crud_plus import CRUDPlus
 from backend.common.enums import StatusType
 from backend.plugin.ai.model import AIProvider
 from backend.plugin.ai.schema.provider import CreateAIProviderParam, UpdateAIProviderParam
+from backend.utils.timezone import timezone
 
 
 class CRUDAIProvider(CRUDPlus[AIProvider]):
@@ -20,7 +21,17 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param pk: 供应商 ID
         :return:
         """
-        return await self.select_model(db, pk)
+        return await self.select_model(db, pk, deleted=0)
+
+    async def get_by_ids(self, db: AsyncSession, pks: list[int]) -> Sequence[AIProvider]:
+        """
+        批量获取供应商
+
+        :param db: 数据库会话
+        :param pks: 供应商 ID 列表
+        :return:
+        """
+        return await self.select_models(db, id__in=pks, deleted=0)
 
     async def get_select(self, name: str | None, type: int | None, status: int | None) -> Select:
         """
@@ -31,7 +42,7 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param status: 状态
         :return:
         """
-        filters = {}
+        filters = {'deleted': 0}
 
         if name is not None:
             filters['name__like'] = f'%{name}%'
@@ -49,7 +60,7 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param db: 数据库会话
         :return:
         """
-        return await self.select_models(db, status=StatusType.enable.value)
+        return await self.select_models_order(db, 'id', 'desc', status=StatusType.enable.value, deleted=0)
 
     async def create(self, db: AsyncSession, obj: CreateAIProviderParam) -> None:
         """
@@ -67,10 +78,10 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
 
         :param db: 数据库会话
         :param pk: 供应商 ID
-        :param obj: 更新 供应商参数
+        :param obj: 更新供应商参数
         :return:
         """
-        return await self.update_model(db, pk, obj)
+        return await self.update_model_by_column(db, obj, id=pk, deleted=0)
 
     async def delete(self, db: AsyncSession, pks: list[int]) -> int:
         """
@@ -80,7 +91,17 @@ class CRUDAIProvider(CRUDPlus[AIProvider]):
         :param pks: 供应商 ID 列表
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pks)
+        return await self.delete_model_by_column(
+            db,
+            allow_multiple=True,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            id__in=pks,
+            deleted=0,
+        )
 
 
 ai_provider_dao: CRUDAIProvider = CRUDAIProvider(AIProvider)

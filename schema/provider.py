@@ -52,5 +52,5 @@ class GetAIProviderModelDetail(SchemaBase):
     """获取供应商模型详情"""
 
     id: str = Field(description='模型标识符')
-    object: str = Field(description='对象类型始终为 “model”')
-    created: int = Field(description='模型创建时的 Unix 时间戳（以秒为单位）')
+    object: str | None = Field(default=None, description='模型对象类型')
+    created: int | None = Field(default=None, description='模型创建时的 Unix 时间戳（以秒为单位）')

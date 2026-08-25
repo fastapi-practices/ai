@@ -76,6 +76,7 @@ _SNAPSHOT_MESSAGE_BUILD_CONFIGS: tuple[SnapshotMessageBuildConfig, ...] = (
         lambda message: {
             'content': message.content,
             'tool_calls': message.tool_calls,
+            'encrypted_value': message.encrypted_value,
         },
         primary_without_suffix=True,
     ),
@@ -96,6 +97,8 @@ _SNAPSHOT_MESSAGE_BUILD_CONFIGS: tuple[SnapshotMessageBuildConfig, ...] = (
             'content': message.content,
             'tool_call_id': message.tool_call_id,
             'error': getattr(message, 'error', None),
+            # 透传 outcome 等非 success 状态（pydantic-ai 编码于 encrypted_value）
+            'encrypted_value': message.encrypted_value,
         },
     ),
     SnapshotMessageBuildConfig(
@@ -108,70 +111,6 @@ _SNAPSHOT_MESSAGE_BUILD_CONFIGS: tuple[SnapshotMessageBuildConfig, ...] = (
         },
     ),
 )
-
-
-def _build_fragment_snapshot_id(
-    *,
-    message_id: int | None,
-    message_index: int,
-    fragment_type: str,
-    fragment_index: int,
-    primary_without_suffix: bool = False,
-) -> str:
-    """
-    构建分片快照消息 ID
-
-    :param message_id: 持久化消息 ID
-    :param message_index: 消息索引
-    :param fragment_type: 分片类型
-    :param fragment_index: 分片索引
-    :param primary_without_suffix: 首个分片是否省略后缀
-    :return:
-    """
-    base_id = f'msg_{message_id if message_id is not None else message_index}'
-    if primary_without_suffix and fragment_index == 0:
-        return base_id
-    return f'{base_id}_{fragment_type}_{fragment_index}'
-
-
-def _build_snapshot_message(
-    *,
-    encoded_message: Message,
-    base_meta: dict[str, SnapshotMetaValue],
-    message_id: int | None,
-    message_index: int,
-    fragment_indexes: defaultdict[str, int],
-    primary_without_suffix: bool,
-) -> SnapshotMessage:
-    """
-    根据标准 AG-UI 消息构建单条快照消息
-
-    :param encoded_message: 标准 AG-UI 消息
-    :param base_meta: 公共元信息
-    :param message_id: 持久化消息 ID
-    :param message_index: 消息索引
-    :param fragment_indexes: 各分片类型索引
-    :param primary_without_suffix: 是否为首条输出消息
-    :return:
-    """
-    for config in _SNAPSHOT_MESSAGE_BUILD_CONFIGS:
-        if not isinstance(encoded_message, config.message_type):
-            continue
-        fragment_index = fragment_indexes[config.fragment_type]
-        snapshot_message = config.detail_model(
-            id=_build_fragment_snapshot_id(
-                message_id=message_id,
-                message_index=message_index,
-                fragment_type=config.fragment_type,
-                fragment_index=fragment_index,
-                primary_without_suffix=primary_without_suffix and config.primary_without_suffix,
-            ),
-            **config.extra_fields_getter(encoded_message),
-            **base_meta,
-        )
-        fragment_indexes[config.fragment_type] += 1
-        return cast('SnapshotMessage', snapshot_message)
-    raise ValueError(f'不支持的 AG-UI 消息类型: {type(encoded_message).__name__}')
 
 
 def _build_snapshot_messages_from_encoded_messages(
@@ -196,16 +135,27 @@ def _build_snapshot_messages_from_encoded_messages(
     fragment_indexes: defaultdict[str, int] = defaultdict(int)
 
     for encoded_message in encoded_messages:
-        snapshot_messages.append(
-            _build_snapshot_message(
-                encoded_message=encoded_message,
-                base_meta=base_meta,
-                message_id=message_id,
-                message_index=message_index,
-                fragment_indexes=fragment_indexes,
-                primary_without_suffix=not snapshot_messages,
+        for config in _SNAPSHOT_MESSAGE_BUILD_CONFIGS:
+            if not isinstance(encoded_message, config.message_type):
+                continue
+            fragment_index = fragment_indexes[config.fragment_type]
+            base_id = f'msg_{message_id if message_id is not None else message_index}'
+            primary_without_suffix = not snapshot_messages and config.primary_without_suffix and fragment_index == 0
+            snapshot_id = base_id if primary_without_suffix else f'{base_id}_{config.fragment_type}_{fragment_index}'
+            snapshot_messages.append(
+                cast(
+                    'SnapshotMessage',
+                    config.detail_model(
+                        id=snapshot_id,
+                        **config.extra_fields_getter(encoded_message),
+                        **base_meta,
+                    ),
+                )
             )
-        )
+            fragment_indexes[config.fragment_type] += 1
+            break
+        else:
+            raise ValueError(f'不支持的 AG-UI 消息类型: {type(encoded_message).__name__}')
 
     if snapshot_messages or not fallback_empty_assistant:
         return snapshot_messages
@@ -249,7 +199,7 @@ def serialize_request_message(
         'model_id': model_id,
         'created_time': message.parts[0].timestamp,
         'message_index': message_index,
-        'message_type': 'normal',
+        'message_type': message.state if message.state != 'complete' else 'normal',
     }
 
     encoded_messages = AGUIAdapter.dump_messages([message], preserve_file_data=True)
@@ -288,7 +238,14 @@ def serialize_response_message(
         'model_id': model_id or message.model_name,
         'created_time': message.timestamp,
         'message_index': message_index,
-        'message_type': 'error' if (message.metadata or {}).get('is_error') else 'normal',
+        # 对齐 pydantic-ai ModelResponse.state（complete/incomplete/suspended/interrupted）
+        'message_type': (
+            'error'
+            if (message.metadata or {}).get('is_error')
+            else 'normal'
+            if message.state == 'complete'
+            else message.state
+        ),
     }
 
     encoded_messages = AGUIAdapter.dump_messages([message], preserve_file_data=True)
@@ -308,6 +265,7 @@ def serialize_messages_to_snapshot(
     message_ids: Sequence[int | None] | None = None,
     provider_ids: Sequence[int | None] | None = None,
     model_ids: Sequence[str | None] | None = None,
+    message_indexes: Sequence[int | None] | None = None,
 ) -> AIChatAgUiMessagesSnapshotDetail:
     """
     序列化模型消息为快照
@@ -317,6 +275,7 @@ def serialize_messages_to_snapshot(
     :param message_ids: 持久化消息 ID 列表
     :param provider_ids: 供应商 ID 列表
     :param model_ids: 模型 ID 列表
+    :param message_indexes: 持久化消息索引列表
     :return:
     """
     snapshot_messages: list[AIChatAgUiSnapshotMessageDetail] = []
@@ -325,32 +284,31 @@ def serialize_messages_to_snapshot(
         message_ids or [None] * len(messages),
         provider_ids or [None] * len(messages),
         model_ids or [None] * len(messages),
+        message_indexes or [None] * len(messages),
         strict=False,
     )
-    for message, message_id, provider_id, model_id in message_contexts:
-        message_index = len(snapshot_messages)
+    for fallback_index, (message, message_id, provider_id, model_id, message_index) in enumerate(message_contexts):
+        resolved_message_index = fallback_index if message_index is None else message_index
         if isinstance(message, ModelRequest):
-            snapshot_messages.extend(
-                serialize_request_message(
-                    message=message,
-                    conversation_id=conversation_id,
-                    message_id=message_id,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    message_index=message_index,
-                )
+            request_messages = serialize_request_message(
+                message=message,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                message_index=resolved_message_index,
             )
+            snapshot_messages.extend(request_messages)
             continue
         if isinstance(message, ModelResponse):
-            snapshot_messages.extend(
-                serialize_response_message(
-                    message=message,
-                    conversation_id=conversation_id,
-                    message_id=message_id,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    message_index=message_index,
-                )
+            response_messages = serialize_response_message(
+                message=message,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                message_index=resolved_message_index,
             )
+            snapshot_messages.extend(response_messages)
 
     return AIChatAgUiMessagesSnapshotDetail(messages=snapshot_messages)

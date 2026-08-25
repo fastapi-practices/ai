@@ -21,7 +21,7 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param pk: 模型 ID
         :return:
         """
-        return await self.select_model(db, pk)
+        return await self.select_model(db, pk, deleted=0)
 
     async def get_by_model_and_provider(self, db: AsyncSession, model_id: str, provider_id: int) -> AIModel | None:
         """
@@ -32,7 +32,7 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param provider_id: 供应商
         :return:
         """
-        return await self.select_model_by_column(db, model_id=model_id, provider_id=provider_id)
+        return await self.select_model_by_column(db, model_id=model_id, provider_id=provider_id, deleted=0)
 
     async def get_select(self, provider_id: int | None, model_id: str | None, status: int | None) -> Select:
         """
@@ -43,7 +43,7 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param status: 状态
         :return:
         """
-        filters = {}
+        filters = {'deleted': 0}
 
         if provider_id is not None:
             filters['provider_id'] = provider_id
@@ -63,12 +63,44 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param status: 状态
         :return:
         """
-        filters = {'provider_id': provider_id}
+        filters = {'provider_id': provider_id, 'deleted': 0}
 
         if status is not None:
             filters['status'] = status
 
         return await self.select_models(db, **filters)
+
+    async def get_all_by_providers(
+        self,
+        db: AsyncSession,
+        provider_ids: list[int],
+        *,
+        status: int | None = None,
+    ) -> Sequence[AIModel]:
+        """
+        通过供应商 ID 列表获取所有模型
+
+        :param db: 数据库会话
+        :param provider_ids: 供应商 ID 列表
+        :param status: 状态
+        :return:
+        """
+        if not provider_ids:
+            return []
+        filters = {'provider_id__in': provider_ids, 'deleted': 0}
+        if status is not None:
+            filters['status'] = status
+        return await self.select_models(db, **filters)
+
+    async def get_by_ids(self, db: AsyncSession, pks: list[int]) -> Sequence[AIModel]:
+        """
+        批量获取模型
+
+        :param db: 数据库会话
+        :param pks: 模型 ID 列表
+        :return:
+        """
+        return await self.select_models(db, id__in=pks, deleted=0)
 
     async def get_by_provider_model_pairs(self, db: AsyncSession, pairs: list[tuple[int, str]]) -> Sequence[AIModel]:
         """
@@ -84,7 +116,7 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         provider_ids = list({provider_id for provider_id, _ in pairs})
         model_ids = list({model_id for _, model_id in pairs})
         pair_set = set(pairs)
-        models = await self.select_models(db, provider_id__in=provider_ids, model_id__in=model_ids)
+        models = await self.select_models(db, provider_id__in=provider_ids, model_id__in=model_ids, deleted=0)
         return [model for model in models if (model.provider_id, model.model_id) in pair_set]
 
     async def create(self, db: AsyncSession, obj: CreateAIModelParam) -> None:
@@ -101,7 +133,7 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         """
         批量创建模型
 
-        :param db:数据库会话
+        :param db: 数据库会话
         :param objs: 批量创建模型参数
         :return:
         """
@@ -121,10 +153,10 @@ class CRUDAIModel(CRUDPlus[AIModel]):
 
         :param db: 数据库会话
         :param pk: 模型 ID
-        :param obj: 更新 模型参数
+        :param obj: 更新模型参数
         :return:
         """
-        return await self.update_model(db, pk, obj)
+        return await self.update_model_by_column(db, obj, id=pk, deleted=0)
 
     async def delete(self, db: AsyncSession, pks: list[int]) -> int:
         """
@@ -134,7 +166,17 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param pks: 模型 ID 列表
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, id__in=pks)
+        return await self.delete_model_by_column(
+            db,
+            allow_multiple=True,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            id__in=pks,
+            deleted=0,
+        )
 
     async def delete_by_provider(self, db: AsyncSession, provider_id: int) -> int:
         """
@@ -144,7 +186,17 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param provider_id: 供应商 ID
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, provider_id=provider_id)
+        return await self.delete_model_by_column(
+            db,
+            allow_multiple=True,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            provider_id=provider_id,
+            deleted=0,
+        )
 
     async def delete_by_providers(self, db: AsyncSession, provider_ids: list[int]) -> int:
         """
@@ -154,7 +206,17 @@ class CRUDAIModel(CRUDPlus[AIModel]):
         :param provider_ids: 供应商 ID 列表
         :return:
         """
-        return await self.delete_model_by_column(db, allow_multiple=True, provider_id__in=provider_ids)
+        return await self.delete_model_by_column(
+            db,
+            allow_multiple=True,
+            logical_deletion=True,
+            deleted_flag_column='deleted',
+            deleted_flag_value=self.model.id,
+            deleted_at_column='deleted_time',
+            deleted_at_factory=timezone.now(),
+            provider_id__in=provider_ids,
+            deleted=0,
+        )
 
 
 ai_model_dao: CRUDAIModel = CRUDAIModel(AIModel)

@@ -9,6 +9,10 @@ class AIModel(Base):
     """AI 模型"""
 
     __tablename__ = 'ai_model'
+    __table_args__ = (
+        sa.UniqueConstraint('provider_id', 'model_id', 'deleted', name='uk_ai_model_provider_id_model_id_deleted'),
+        {'comment': 'AI 模型'},
+    )
 
     id: Mapped[id_key] = mapped_column(init=False)
     provider_id: Mapped[int] = mapped_column(sa.BigInteger, comment='供应商关联 ID')

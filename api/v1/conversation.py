@@ -84,23 +84,21 @@ async def update_conversation_pinned_status(
 
 
 @router.post(
-    '/{pk}/clear-context',
-    summary='清除对话上下文',
+    '/{pk}/stop',
+    summary='停止对话生成',
     dependencies=[DependsJwtAuth],
 )
-async def clear_conversation_context(
+async def stop_conversation_generation(
     request: Request,
     db: CurrentSessionTransaction,
     pk: Annotated[str, Path(description='对话 ID')],
 ) -> ResponseModel:
-    count = await ai_conversation_service.clear_context(
+    await ai_conversation_service.stop_generation(
         db=db,
         conversation_id=pk,
         user_id=request.user.id,
     )
-    if count > 0:
-        return response_base.success()
-    return response_base.fail()
+    return response_base.success()
 
 
 @router.delete('/{pk}', summary='删除对话', dependencies=[DependsJwtAuth])

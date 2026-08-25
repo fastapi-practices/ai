@@ -11,10 +11,12 @@ from backend.common.enums import StatusType
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.common.pagination import cursor_paging_data
+from backend.plugin.ai.crud.crud_default_model import ai_default_model_dao
 from backend.plugin.ai.crud.crud_model import ai_model_dao
 from backend.plugin.ai.crud.crud_provider import ai_provider_dao
 from backend.plugin.ai.enums import AIProviderType
 from backend.plugin.ai.model import AIProvider
+from backend.plugin.ai.providers.base import normalize_provider_api_host
 from backend.plugin.ai.schema.model import CreateAIModelParam
 from backend.plugin.ai.schema.provider import (
     CreateAIProviderParam,
@@ -23,12 +25,21 @@ from backend.plugin.ai.schema.provider import (
     UpdateAIProviderParam,
 )
 from backend.plugin.ai.utils.api_key_ops import mask_api_key
-from backend.plugin.ai.utils.provider_control import normalize_provider_api_host
 from backend.utils.timezone import timezone
 
 
 class AIProviderService:
     """AI 供应商服务类"""
+
+    @staticmethod
+    async def get_all(*, db: AsyncSession) -> Sequence[AIProvider]:
+        """
+        获取所有 AI 供应商
+
+        :param db: 数据库会话
+        :return:
+        """
+        return await ai_provider_dao.get_all(db)
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int) -> AIProvider:
@@ -43,66 +54,6 @@ class AIProviderService:
         if not ai_provider:
             raise errors.NotFoundError(msg='供应商不存在')
         return ai_provider
-
-    async def get_models(self, *, db: AsyncSession, pk: int) -> list[GetAIProviderModelDetail]:
-        """获取供应商模型"""
-        ai_provider = await self.get(db=db, pk=pk)
-        if ai_provider.status != StatusType.enable:
-            raise errors.RequestError(msg='当前供应商已停用，无法获取模型列表')
-        if ai_provider.type not in {
-            AIProviderType.openai,
-            AIProviderType.openai_responses,
-            AIProviderType.xai,
-            AIProviderType.openrouter,
-        }:
-            raise errors.RequestError(msg='当前供应商暂不支持自动同步模型，请手动维护模型列表')
-        url = f'{normalize_provider_api_host(ai_provider.type, ai_provider.api_host)}/models'
-        headers = {'Authorization': f'Bearer {ai_provider.api_key}'}
-        async with httpx.AsyncClient(timeout=10) as client:
-            try:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                payload = response.json()
-                return [GetAIProviderModelDetail(**data) for data in payload['data']]
-            except httpx.HTTPError as e:
-                log.error(f'获取供应商模型列表失败：{e}')
-                raise errors.ForbiddenError(msg='获取供应商模型列表失败，请稍后重试')
-            except ValueError as e:
-                log.error(f'供应商模型列表 JSON 解析失败：{e}')
-                raise errors.RequestError(msg='供应商返回的模型数据不是合法 JSON') from e
-            except (KeyError, TypeError, ValidationError) as e:
-                log.error(f'供应商模型列表数据格式错误：{e}')
-                raise errors.RequestError(msg='供应商返回的模型数据格式不正确') from e
-
-    async def sync_models(self, *, db: AsyncSession, pk: int) -> None:
-        """
-        同步供应商模型
-
-        :param db: 数据库会话
-        :param pk: 供应商 ID
-        :return:
-        """
-        existing_models = await ai_model_dao.get_all(db, provider_id=pk)
-        existing_status = {model.model_id: StatusType(model.status) for model in existing_models}
-        provider_models = await self.get_models(db=db, pk=pk)
-        await ai_model_dao.delete_by_provider(db, pk)
-        if not provider_models:
-            return
-
-        await ai_model_dao.bulk_create(
-            db,
-            [
-                {
-                    **CreateAIModelParam(
-                        provider_id=pk,
-                        model_id=obj.id,
-                        status=existing_status.get(obj.id, StatusType.enable),
-                    ).model_dump(),
-                    'created_time': timezone.now(),
-                }
-                for obj in provider_models
-            ],
-        )
 
     @staticmethod
     async def get_list(
@@ -123,17 +74,6 @@ class AIProviderService:
         """
         ai_provider_select = await ai_provider_dao.get_select(name, type, status)
         return await cursor_paging_data(db, ai_provider_select)
-
-    @staticmethod
-    async def get_all(*, db: AsyncSession) -> Sequence[AIProvider]:
-        """
-        获取所有 AI 供应商
-
-        :param db: 数据库会话
-        :return:
-        """
-        ai_providers = await ai_provider_dao.get_all(db)
-        return ai_providers
 
     @staticmethod
     async def create(*, db: AsyncSession, obj: CreateAIProviderParam) -> None:
@@ -185,9 +125,85 @@ class AIProviderService:
         :param obj: 供应商 ID 列表
         :return:
         """
+        await ai_default_model_dao.delete_by_providers(db, obj.pks)
         await ai_model_dao.delete_by_providers(db, obj.pks)
         count = await ai_provider_dao.delete(db, obj.pks)
         return count
+
+    async def get_models(self, *, db: AsyncSession, pk: int) -> list[GetAIProviderModelDetail]:
+        """
+        获取供应商模型
+
+        :param db: 数据库会话
+        :param pk: 供应商 ID
+        :return:
+        """
+        ai_provider = await self.get(db=db, pk=pk)
+        if ai_provider.status != StatusType.enable:
+            raise errors.RequestError(msg='当前供应商已停用，无法获取模型列表')
+        if ai_provider.type not in {
+            AIProviderType.openai,
+            AIProviderType.openai_responses,
+            AIProviderType.xai,
+            AIProviderType.openrouter,
+        }:
+            raise errors.RequestError(msg='当前供应商暂不支持自动同步模型，请手动维护模型列表')
+        url = f'{normalize_provider_api_host(ai_provider.type, ai_provider.api_host)}/models'
+        headers = {'Authorization': f'Bearer {ai_provider.api_key}'}
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+                return [GetAIProviderModelDetail(**data) for data in payload['data']]
+            except httpx.HTTPError as e:
+                log.error(f'获取供应商模型列表失败：{e}')
+                raise errors.RequestError(msg='获取供应商模型列表失败，请稍后重试') from e
+            except ValueError as e:
+                log.error(f'供应商模型列表 JSON 解析失败：{e}')
+                raise errors.RequestError(msg='供应商返回的模型数据不是合法 JSON') from e
+            except (KeyError, TypeError, ValidationError) as e:
+                log.error(f'供应商模型列表数据格式错误：{e}')
+                raise errors.RequestError(msg='供应商返回的模型数据格式不正确') from e
+
+    async def sync_models(self, *, db: AsyncSession, pk: int) -> None:
+        """
+        同步供应商模型
+
+        :param db: 数据库会话
+        :param pk: 供应商 ID
+        :return:
+        """
+        existing_models = await ai_model_dao.get_all(db, provider_id=pk)
+        existing_models_by_id = {model.model_id: model for model in existing_models}
+        provider_models = await self.get_models(db=db, pk=pk)
+        provider_model_ids = {model.id for model in provider_models}
+        removed_models = [model for model in existing_models if model.model_id not in provider_model_ids]
+        await ai_default_model_dao.delete_by_provider_model_pairs(
+            db,
+            [(model.provider_id, model.model_id) for model in removed_models],
+        )
+        await ai_model_dao.delete_by_provider(db, pk)
+        if not provider_models:
+            return
+
+        payloads: list[dict[str, Any]] = []
+        for obj in provider_models:
+            existing_model = existing_models_by_id.get(obj.id)
+            model = (
+                CreateAIModelParam.model_validate(existing_model, from_attributes=True)
+                if existing_model
+                else CreateAIModelParam(
+                    provider_id=pk,
+                    model_id=obj.id,
+                    status=StatusType.enable,
+                )
+            )
+            payloads.append({
+                **model.model_dump(),
+                'created_time': timezone.now(),
+            })
+        await ai_model_dao.bulk_create(db, payloads)
 
 
 ai_provider_service: AIProviderService = AIProviderService()

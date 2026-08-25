@@ -1,7 +1,7 @@
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic_ai import ModelRequest, ModelResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.plugin.ai.model.conversation import AIConversation
 from backend.plugin.ai.model.message import AIMessage
@@ -12,25 +12,7 @@ from backend.plugin.ai.schema.chat import AIChatForwardedPropsParam
 class ChatAgentDeps:
     """聊天代理依赖"""
 
-    db: AsyncSession
     user_id: int
-
-
-@dataclass(slots=True)
-class ChatCompletionPersistence:
-    """聊天结果持久化上下文"""
-
-    conversation_id: str
-    user_id: int
-    forwarded_props: AIChatForwardedPropsParam
-    conversation: AIConversation | None
-    title: str
-    replace_message_row_ids: list[int] | None
-    replace_start_message_index: int | None
-    replace_end_message_index: int | None
-    insert_before_message_index: int | None
-    base_message_index: int
-    result_offset: int
 
 
 @dataclass(slots=True)
@@ -40,4 +22,37 @@ class ChatConversationState:
     conversation: AIConversation | None
     message_rows: list[AIMessage]
     model_messages: list[ModelRequest | ModelResponse]
-    context_start_index: int
+    row_model_message_ranges: list[tuple[int, int]]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRunContext:
+    """协议运行上下文，核心聊天流程只读取通用字段"""
+
+    conversation_id: str
+    forwarded_props: AIChatForwardedPropsParam
+    protocol_context: Any
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionPersistenceContext:
+    """普通聊天完成持久化上下文"""
+
+    conversation_id: str
+    user_id: int
+    forwarded_props: AIChatForwardedPropsParam
+    title: str
+    assistant_message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RegenerationPersistenceContext:
+    """重生成完成持久化上下文"""
+
+    conversation_id: str
+    user_id: int
+    forwarded_props: AIChatForwardedPropsParam
+    assistant_message_id: int | None = None
+    insert_before_index: int | None = None
+    replace_start_index: int | None = None
+    replace_end_index: int | None = None

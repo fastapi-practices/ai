@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_serializer
 from pydantic.alias_generators import to_camel
 
+from backend.common.enums import PrimaryKeyType
 from backend.common.schema import SchemaBase
+from backend.core.conf import settings
 
 
 class AIChatSchemaBase(SchemaBase):
@@ -24,6 +26,9 @@ class AIChatMessageMetaSchemaBase(AIChatSchemaBase):
     persisted_message_id: int | None = Field(default=None, description='持久化消息 ID')
     provider_id: int | None = Field(default=None, description='供应商 ID')
     model_id: str | None = Field(default=None, description='模型 ID')
-    message_type: Literal['normal', 'error'] | None = Field(default=None, description='消息类型')
+    message_type: Literal['normal', 'error', 'incomplete', 'suspended', 'interrupted'] | None = Field(
+        default=None,
+        description='消息类型',
+    )
     message_index: int | None = Field(default=None, description='消息索引')
     created_time: datetime | None = Field(default=None, description='创建时间')

@@ -1,6 +1,12 @@
 from backend.common.enums import IntEnum, StrEnum
 
 
+class AIDefaultModelScene(StrEnum):
+    """AI 默认模型场景"""
+
+    assistant = 'assistant'
+
+
 class AIProviderType(IntEnum):
     """AI 供应商类型"""
 
@@ -23,14 +29,6 @@ class AIProviderType(IntEnum):
         }[self]
 
 
-class McpType(IntEnum):
-    """Mcp 类型"""
-
-    stdio = 0
-    sse = 1
-    streamable_http = 2
-
-
 class AIChatAttachmentType(StrEnum):
     """聊天附件类型"""
 
@@ -47,27 +45,10 @@ class AIChatAttachmentSourceType(StrEnum):
     base64 = 'base64'
 
 
-class AIChatGenerationType(StrEnum):
-    """聊天生成类型"""
+class AIMessageStatus(StrEnum):
+    """AI 消息状态"""
 
-    text = 'text'
-    image = 'image'
-
-
-class AIWebSearchType(StrEnum):
-    """网络搜索模式"""
-
-    builtin = 'builtin'
-    exa = 'exa'
-    tavily = 'tavily'
-    duckduckgo = 'duckduckgo'
-
-
-class AIChatThinkingType(StrEnum):
-    """聊天模型思考强度"""
-
-    minimal = 'minimal'
-    low = 'low'
-    medium = 'medium'
-    high = 'high'
-    xhigh = 'xhigh'
+    pending = 'pending'
+    success = 'success'
+    error = 'error'
+    interrupted = 'interrupted'

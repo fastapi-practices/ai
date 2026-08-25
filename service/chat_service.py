@@ -1,135 +1,65 @@
-from typing import Any
+import anyio
 
-from pydantic_ai import AgentRunResult, ModelRequest, UserPromptPart
+from pydantic_ai import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_core import to_jsonable_python
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
 from backend.common.exception import errors
 from backend.common.log import log
 from backend.database.db import async_db_session
-from backend.plugin.ai.chat_runtime import (
-    build_chat_agent,
-    is_user_prompt_message,
-    persist_completion_messages,
-    prepare_run_input,
-    stream_response,
-)
+from backend.plugin.ai.chat.runner import is_user_prompt_message, open_chat_session
+from backend.plugin.ai.chat.runs import abort_prepared_run, activate_run
 from backend.plugin.ai.crud.crud_conversation import ai_conversation_dao
 from backend.plugin.ai.crud.crud_message import ai_message_dao
-from backend.plugin.ai.dataclasses import ChatCompletionPersistence
-from backend.plugin.ai.protocol.ag_ui.request_decoder import decode_input_messages
-from backend.plugin.ai.schema.chat import AIChatCompletionParam, AIChatForwardedPropsParam
+from backend.plugin.ai.dataclasses import CompletionPersistenceContext
+from backend.plugin.ai.enums import AIMessageStatus
+from backend.plugin.ai.protocol.registry import get_chat_protocol_adapter
+from backend.plugin.ai.schema.chat import AIChatCompletionParam
 from backend.plugin.ai.schema.conversation import CreateAIConversationParam, UpdateAIConversationParam
 from backend.plugin.ai.service.conversation_service import ai_conversation_service
 from backend.plugin.ai.utils.conversation_control import normalize_generated_conversation_title
+from backend.plugin.ai.utils.message_storage import build_chat_message_record
 
 
-class ChatService:
-    """聊天服务"""
+class AIChatService:
+    """AI 聊天服务类"""
 
     @staticmethod
-    def _extract_prompt(*, current_message: ModelRequest) -> str:
+    def _get_current_user_prompt_part(*, messages: list[ModelMessage]) -> UserPromptPart:
         """
-        提取当前轮用户输入文本
+        获取当前轮用户输入部分
 
-        :param current_message: 当前轮消息
+        :param messages: 模型消息列表
         :return:
         """
-        if not current_message.parts:
+        if len(messages) != 1:
             raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
+        current_message = messages[-1]
+        if not isinstance(current_message, ModelRequest) or not is_user_prompt_message(message=current_message):
+            raise errors.RequestError(msg='最后一条消息必须是用户消息')
         first_part = current_message.parts[0]
         if not isinstance(first_part, UserPromptPart):
             raise errors.RequestError(msg='普通聊天请求仅支持传入当前轮用户消息')
-
-        prompt_parts: list[str] = []
-        has_binary_input = False
-        if isinstance(first_part.content, str):
-            prompt_parts.append(first_part.content)
-        else:
-            for item in first_part.content:
-                if isinstance(item, str):
-                    prompt_parts.append(item)
-                else:
-                    has_binary_input = True
-
-        prompt = ' '.join(' '.join(part.split()) for part in prompt_parts if part.split())
-        if not prompt and not has_binary_input:
-            raise errors.RequestError(msg='当前轮用户消息不能为空')
-        return prompt
+        return first_part
 
     @staticmethod
-    async def _persist_input_messages_before_stream(
-        *,
-        conversation_id: str,
-        user_id: int,
-        forwarded_props: AIChatForwardedPropsParam,
-        prompt: str,
-        payload_messages: list[dict[str, Any]],
-    ) -> None:
+    def _parse_user_prompt(*, first_part: UserPromptPart) -> tuple[str, bool]:
         """
-        预提交当前轮用户输入
+        解析用户输入文本和二进制输入状态
 
-        :param conversation_id: 对话 ID
-        :param user_id: 用户 ID
-        :param forwarded_props: 聊天扩展参数
-        :param prompt: 当前轮用户输入文本
-        :param payload_messages: 待落库消息
+        :param first_part: 用户输入部分
         :return:
         """
-        async with async_db_session.begin() as session:
-            conversation = await ai_conversation_service.get_owned_conversation(
-                db=session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                must_exist=False,
-            )
-            if conversation:
-                await ai_conversation_dao.update(
-                    session,
-                    conversation.id,
-                    UpdateAIConversationParam(
-                        conversation_id=conversation.conversation_id,
-                        title=conversation.title,
-                        provider_id=forwarded_props.provider_id,
-                        model_id=forwarded_props.model_id,
-                        user_id=conversation.user_id,
-                        pinned_time=conversation.pinned_time,
-                        context_start_message_id=conversation.context_start_message_id,
-                        context_cleared_time=conversation.context_cleared_time,
-                    ),
-                )
-            else:
-                await ai_conversation_dao.create(
-                    session,
-                    CreateAIConversationParam(
-                        conversation_id=conversation_id,
-                        title=normalize_generated_conversation_title(title=prompt),
-                        provider_id=forwarded_props.provider_id,
-                        model_id=forwarded_props.model_id,
-                        user_id=user_id,
-                    ),
-                )
-
-            message_rows = await ai_message_dao.get_all(session, conversation_id)
-            await ai_message_dao.bulk_create(
-                session,
-                [
-                    {
-                        'conversation_id': conversation_id,
-                        'provider_id': forwarded_props.provider_id,
-                        'model_id': forwarded_props.model_id,
-                        'message_index': len(message_rows) + index,
-                        'message': message,
-                    }
-                    for index, message in enumerate(payload_messages)
-                ],
-            )
+        content_items = [first_part.content] if isinstance(first_part.content, str) else list(first_part.content)
+        prompt_parts = [item for item in content_items if isinstance(item, str)]
+        has_binary_input = len(prompt_parts) != len(content_items)
+        prompt = ' '.join(' '.join(part.split()) for part in prompt_parts if part.split())
+        return prompt, has_binary_input
 
     async def create_completion(
         self,
         *,
-        db: AsyncSession,
         user_id: int,
         obj: AIChatCompletionParam,
         accept: str | None,
@@ -137,81 +67,152 @@ class ChatService:
         """
         创建流式对话
 
-        :param db: 数据库会话
         :param user_id: 用户 ID
         :param obj: 请求体
         :param accept: Accept 请求头
         :return:
         """
+        protocol_adapter = get_chat_protocol_adapter()
         try:
-            current_messages = decode_input_messages(messages=obj.messages)
+            current_messages = protocol_adapter.decode_input_messages(messages=obj.messages)
         except Exception as e:
             log.warning(f'聊天消息加载失败: {e}')
             raise errors.RequestError(msg='聊天消息格式非法') from e
 
-        if not current_messages:
-            raise errors.RequestError(msg='当前轮消息不能为空')
-        current_message = current_messages[-1]
-        if not isinstance(current_message, ModelRequest) or not is_user_prompt_message(message=current_message):
-            raise errors.RequestError(msg='最后一条消息必须是用户消息')
-
-        run_input = prepare_run_input(
+        first_part = self._get_current_user_prompt_part(messages=current_messages)
+        prompt, has_binary_input = self._parse_user_prompt(first_part=first_part)
+        if not prompt and not has_binary_input:
+            raise errors.RequestError(msg='当前轮用户消息不能为空')
+        run_context = protocol_adapter.build_run_context(
             conversation_id=obj.conversation_id,
             forwarded_props=obj.forwarded_props,
         )
-        conversation_id = run_input.thread_id
-        forwarded_props = AIChatForwardedPropsParam.model_validate(run_input.forwarded_props or {})
-        agent = await build_chat_agent(db=db, forwarded_props=forwarded_props)
-        prompt = self._extract_prompt(current_message=current_message)
-        payload_messages = to_jsonable_python(current_messages, by_alias=True)
+        conversation_id = run_context.conversation_id
+        forwarded_props = run_context.forwarded_props
 
-        await self._persist_input_messages_before_stream(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            prompt=prompt,
-            payload_messages=payload_messages,
-        )
-
-        state = await ai_conversation_service.get_chat_state(
-            db=db,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            must_exist=True,
-            require_messages=True,
-        )
-        message_history = state.model_messages[state.context_start_index :]
-        persistence = ChatCompletionPersistence(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            forwarded_props=forwarded_props,
-            conversation=state.conversation,
-            title=state.conversation.title if state.conversation else prompt,
-            replace_message_row_ids=None,
-            replace_start_message_index=None,
-            replace_end_message_index=None,
-            insert_before_message_index=None,
-            base_message_index=len(state.message_rows),
-            result_offset=len(message_history),
-        )
-
-        async def handle_complete(result: AgentRunResult[Any]) -> None:
-            await persist_completion_messages(
-                db=db,
-                persistence=persistence,
-                messages=result.all_messages()[persistence.result_offset :],
+        agent_session = None
+        try:
+            async with async_db_session() as db:
+                agent_session, agent = await open_chat_session(
+                    db=db,
+                    forwarded_props=forwarded_props,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
+            current_messages = protocol_adapter.sanitize_input_messages(
+                agent=agent,
+                run_context=run_context,
+                messages=current_messages,
             )
+            first_part = self._get_current_user_prompt_part(messages=current_messages)
+            prompt, has_binary_input = self._parse_user_prompt(first_part=first_part)
+            if not prompt and not has_binary_input:
+                raise errors.RequestError(msg='当前轮用户消息不能为空')
+            payload_messages = to_jsonable_python(current_messages, by_alias=True)
+            assert isinstance(payload_messages, list)
+            user_message_record = build_chat_message_record(role='user', model_messages=payload_messages)
 
-        return stream_response(
-            db=db,
-            user_id=user_id,
-            agent=agent,
-            run_input=run_input,
-            accept=accept,
-            message_history=message_history,
-            on_complete=handle_complete,
-            persistence=persistence,
-        )
+            async with async_db_session.begin() as session:
+                conversation = await ai_conversation_service.get_owned_conversation(
+                    db=session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    must_exist=False,
+                    for_update=True,
+                )
+                if conversation:
+                    await ai_conversation_service.ensure_idle(db=session, conversation_id=conversation_id)
+                    await ai_conversation_dao.update(
+                        session,
+                        conversation.id,
+                        UpdateAIConversationParam(
+                            conversation_id=conversation.conversation_id,
+                            title=conversation.title,
+                            provider_id=forwarded_props.provider_id,
+                            model_id=forwarded_props.model_id,
+                            user_id=conversation.user_id,
+                            pinned_time=conversation.pinned_time,
+                        ),
+                    )
+                else:
+                    await ai_conversation_dao.create(
+                        session,
+                        CreateAIConversationParam(
+                            conversation_id=conversation_id,
+                            title=normalize_generated_conversation_title(title=prompt),
+                            provider_id=forwarded_props.provider_id,
+                            model_id=forwarded_props.model_id,
+                            user_id=user_id,
+                        ),
+                    )
+
+                next_message_index = await ai_message_dao.get_next_message_index(session, conversation_id)
+                await ai_message_dao.create(
+                    session,
+                    {
+                        'conversation_id': conversation_id,
+                        'provider_id': forwarded_props.provider_id,
+                        'model_id': forwarded_props.model_id,
+                        'message_index': next_message_index,
+                        'status': AIMessageStatus.success,
+                        **user_message_record,
+                    },
+                )
+                assistant_message = await ai_message_dao.create(
+                    session,
+                    {
+                        'conversation_id': conversation_id,
+                        'provider_id': forwarded_props.provider_id,
+                        'model_id': forwarded_props.model_id,
+                        'message_index': next_message_index + 1,
+                        'role': 'assistant',
+                        'status': AIMessageStatus.pending,
+                        'model_messages': [],
+                    },
+                )
+                assistant_message_id = assistant_message.id
+
+                state = await ai_conversation_service.get_chat_state(
+                    db=session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    must_exist=True,
+                    require_messages=True,
+                )
+                message_history = state.model_messages
+                persistence = CompletionPersistenceContext(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    forwarded_props=forwarded_props,
+                    title=state.conversation.title if state.conversation else prompt,
+                    assistant_message_id=assistant_message_id,
+                )
+                response = await agent_session.stream(
+                    user_id=user_id,
+                    agent=agent,
+                    run_context=run_context,
+                    protocol_adapter=protocol_adapter,
+                    accept=accept,
+                    message_history=message_history,
+                    persistence=persistence,
+                )
+            activate_run(conversation_id)
+        except BaseException as exc:
+            # 屏蔽取消：任务取消时仍完成客户端关闭，避免连接泄漏
+            with anyio.CancelScope(shield=True):
+                try:
+                    await abort_prepared_run(conversation_id)
+                except Exception as abort_exc:
+                    log.warning(f'释放聊天任务租约失败: {abort_exc}')
+                if agent_session is not None:
+                    try:
+                        await agent_session.aclose()
+                    except Exception as close_exc:
+                        log.warning(f'关闭模型供应商客户端失败: {close_exc}')
+            if isinstance(exc, IntegrityError):
+                raise errors.ConflictError(msg='当前对话已发生变化，请重试') from exc
+            raise
+        return response
 
 
-ai_chat_service: ChatService = ChatService()
+ai_chat_service: AIChatService = AIChatService()

@@ -14,7 +14,18 @@ from backend.plugin.ai.schema.quick_phrase import (
 
 
 class AIQuickPhraseService:
-    """AI 快捷短语服务"""
+    """AI 快捷短语服务类"""
+
+    @staticmethod
+    async def get_all(*, db: AsyncSession, user_id: int) -> Sequence[AIQuickPhrase]:
+        """
+        获取当前用户所有快捷短语
+
+        :param db: 数据库会话
+        :param user_id: 用户 ID
+        :return:
+        """
+        return await ai_quick_phrase_dao.get_all(db, user_id)
 
     @staticmethod
     async def get(*, db: AsyncSession, pk: int, user_id: int) -> AIQuickPhrase:
@@ -30,17 +41,6 @@ class AIQuickPhraseService:
         if not quick_phrase:
             raise errors.NotFoundError(msg='快捷短语不存在')
         return quick_phrase
-
-    @staticmethod
-    async def get_all(*, db: AsyncSession, user_id: int) -> Sequence[AIQuickPhrase]:
-        """
-        获取当前用户所有快捷短语
-
-        :param db: 数据库会话
-        :param user_id: 用户 ID
-        :return:
-        """
-        return await ai_quick_phrase_dao.get_all(db, user_id)
 
     @staticmethod
     async def get_list(*, db: AsyncSession, user_id: int, content: str | None) -> dict[str, Any]:
