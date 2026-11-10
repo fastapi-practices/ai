@@ -1,4 +1,4 @@
-pydantic-ai-slim[openai,google,anthropic,xai,openrouter,retries,ag-ui]==2.31.0
-# xai-sdk 1.18 仍声明 packaging<26、protobuf<7
-packaging>=25.0,<26
-protobuf>=6.33.5,<7
+pydantic-ai-slim[openai,google,anthropic,xai,openrouter,retries,ag-ui]==2.66.0
+# 与 ai_buddy 插件保持同一 pydantic-ai 版本，避免安装时互相降级
+packaging>=25.0
+protobuf>=7.36.2,<8

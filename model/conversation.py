@@ -4,7 +4,7 @@ import sqlalchemy as sa
 
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.common.model import Base, TimeZone, id_key
+from backend.common.model import Base, id_key
 
 
 class AIConversation(Base):
@@ -22,4 +22,4 @@ class AIConversation(Base):
     title: Mapped[str] = mapped_column(sa.String(256), comment='对话标题')
     provider_id: Mapped[int] = mapped_column(sa.BigInteger, comment='供应商 ID')
     model_id: Mapped[str] = mapped_column(sa.String(512), comment='模型 ID')
-    pinned_time: Mapped[datetime | None] = mapped_column(TimeZone, default=None, comment='置顶时间')
+    pinned_time: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), default=None, comment='置顶时间')

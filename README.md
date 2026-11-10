@@ -12,6 +12,7 @@
 
 如需 MCP、空间、知识、客户端等完整 Buddy 能力，请前往插件市场安装 AI Buddy：https://docs.fba.wu-clan.cc/fastapi_best_architecture_docs/marketplace.html
 
+
 ## 插件类型
 
 - 应用级插件
