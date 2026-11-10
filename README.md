@@ -12,6 +12,8 @@
 
 如需 MCP、空间、知识、客户端等完整 Buddy 能力，请前往插件市场安装 AI Buddy：https://docs.fba.wu-clan.cc/fastapi_best_architecture_docs/marketplace.html
 
+> [!WARNING]
+> 自 1.0.1 版本起不再支持 MySQL 数据库，仅支持 PostgreSQL
 
 ## 插件类型
 
