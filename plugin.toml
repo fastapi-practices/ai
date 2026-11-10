@@ -2,6 +2,7 @@
 icon = "https://wu-clan.github.io/picx-images-hosting/logo/fba.svg"
 summary = "AI"
 version = "1.0.0"
+fba_version = "~=1.17"
 description = "为系统提供基础 AI 文本对话能力，包含供应商、模型、默认模型、快捷短语和会话管理"
 author = "wu-clan"
 tags = ["agent", "ai"]
